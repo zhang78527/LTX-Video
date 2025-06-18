@@ -471,12 +471,7 @@ def infer(
     with open(pipeline_config, "r") as f:
         pipeline_config = yaml.safe_load(f)
         logger.debug(f"✅配置文件存在: {pipeline_config}")
-        
-        # 关键：用 kwargs（就是外部传进来的参数，比如 guidance_scale）覆盖配置文件中的同名参数
-        for k, v in kwargs.items():
-            if v is not None:
-                pipeline_config[k] = v
-                
+                     
     models_dir = "MODEL_DIR"
 
     ltxv_model_name_or_path = pipeline_config["checkpoint_path"]
