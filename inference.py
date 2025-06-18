@@ -471,7 +471,12 @@ def infer(
     with open(pipeline_config, "r") as f:
         pipeline_config = yaml.safe_load(f)
         logger.debug(f"✅配置文件存在: {pipeline_config}")
-
+        
+        # 关键：用 kwargs（就是外部传进来的参数，比如 guidance_scale）覆盖配置文件中的同名参数
+        for k, v in kwargs.items():
+            if v is not None:
+                pipeline_config[k] = v
+                
     models_dir = "MODEL_DIR"
 
     ltxv_model_name_or_path = pipeline_config["checkpoint_path"]
@@ -626,6 +631,7 @@ def infer(
             max_frames=num_frames_padded,
             padding=padding,
         )
+        media_tensor = media_tensor.to(device)
         logger.debug(f"✅media_item(after load_media_file) device: {media_item.device if media_item is not None else 'None'}")
     
     # infer 调用处
@@ -644,6 +650,7 @@ def infer(
         if conditioning_media_paths
         else None
     )
+    media_tensor = media_tensor.to(device)
     if conditioning_items:                                                      # 添加
         for idx, item in enumerate(conditioning_items):                         # 添加
             logger.debug(f"✅推理: 条件媒体 #{idx} device = {item.media_item.device}, target = {device}")
@@ -775,6 +782,7 @@ def prepare_conditioning(
     返回:
         ConditioningItem 对像列表.
     """
+    media_tensor = media_tensor.to(device)
     # 条件参数空列表
     conditioning_items = []
     for path, strength, start_frame in zip(
@@ -832,6 +840,7 @@ def load_media_file(
     padding: tuple[int, int, int, int],
     just_crop: bool = False,
 ) -> torch.Tensor:
+    media_tensor = media_tensor.to(device)
     is_video = any(
         media_path.lower().endswith(ext) for ext in [".mp4", ".avi", ".mov", ".mkv"]
     )
