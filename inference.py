@@ -106,11 +106,22 @@ def load_image_to_tensor_with_resize_and_crop(
     image = np.array(image)
     image = cv2.GaussianBlur(image, (3, 3), 0)
     frame_tensor = torch.from_numpy(image).float()
+    frame_tensor = frame_tensor.to('cuda:0')
+    logger.debug(f"✅frame_tensor(from_numpy) device: {frame_tensor.device}")
+
     frame_tensor = crf_compressor.compress(frame_tensor / 255.0) * 255.0
+    logger.debug(f"✅frame_tensor(after compress) device: {frame_tensor.device}")
+
     frame_tensor = frame_tensor.permute(2, 0, 1)
+    logger.debug(f"✅frame_tensor(after permute) device: {frame_tensor.device}")
+
     frame_tensor = (frame_tensor / 127.5) - 1.0
+    logger.debug(f"✅frame_tensor(after normalize) device: {frame_tensor.device}")
+
     # 创建 5D 张量: (batch_size=1, channels=3, num_frames=1, height, width)
-    return frame_tensor.unsqueeze(0).unsqueeze(2)
+    result_tensor = frame_tensor.unsqueeze(0).unsqueeze(2)
+    logger.debug(f"✅frame_tensor(final 5D) device: {result_tensor.device}")
+    return result_tensor
 
 def calculate_padding(
     source_height: int, source_width: int, target_height: int, target_width: int
@@ -329,7 +340,6 @@ def create_ltx_video_pipeline(
         config_str = metadata.get("config")
         configs = json.loads(config_str)
         allowed_inference_steps = configs.get("allowed_inference_steps", None)
-        print("✅文生视频权重文件包含的配置信息:", configs)
 
     # ====== 修改: 分片加载与低显存适配 ======
     # 自动选择 dtype
@@ -372,8 +382,13 @@ def create_ltx_video_pipeline(
     )
 
     transformer = transformer.to(device)                                                # 将注意力机制模型transformer转移到设备上
+    logger.debug(f"✅transformer.to({device}) device: {next(transformer.parameters()).device}")
+
     vae = vae.to(device)                                                                # 将自动编码器转移到设备上
+    logger.debug(f"✅vae.to({device}) device: {next(vae.parameters()).device}")
+
     text_encoder = text_encoder.to(device)                                              # 将文本编码器转移到设备上
+    logger.debug(f"✅text_encoder.to({device}) device: {next(text_encoder.parameters()).device}")
 
     if enhance_prompt:
         prompt_enhancer_image_caption_model = AutoModelForCausalLM.from_pretrained(         # 图像提示增强模型
@@ -611,6 +626,7 @@ def infer(
             max_frames=num_frames_padded,
             padding=padding,
         )
+        logger.debug(f"✅media_item(after load_media_file) device: {media_item.device if media_item is not None else 'None'}")
     
     # infer 调用处
     conditioning_items = (
@@ -681,6 +697,8 @@ def infer(
         device=device,                                      # cuda:0
         enhance_prompt=enhance_prompt,
     ).images
+    logger.debug(f"✅images (from pipeline) device: {images.device if hasattr(images, 'device') else 'Unknown'}")
+
 
     # 将填充的图像裁剪为所需的分辨率和帧数
     (pad_left, pad_right, pad_top, pad_bottom) = padding
@@ -691,11 +709,13 @@ def infer(
     if pad_right == 0:
         pad_right = images.shape[4]
     images = images[:, :, :num_frames, pad_top:pad_bottom, pad_left:pad_right]
-    logger.debug(f"✅推理文件图像参数: {images}")
+    logger.debug(f"✅images(after crop) device: {images.device}")
 
     for i in range(images.shape[0]):
         # Gathering from B, C, F, H, W to C, F, H, W and then permuting to F, H, W, C
         video_np = images[i].permute(1, 2, 3, 0).cpu().float().numpy()
+        logger.debug(f"✅video_np生成时原images[i] device: {images[i].device}")
+
         # 将图像非替范化到 [0, 255] 范围
         video_np = (video_np * 255).astype(np.uint8)
         fps = frame_rate
@@ -781,8 +801,11 @@ def prepare_conditioning(
             padding=padding,
             just_crop=True,
         )
-        media_tensor = media_tensor.to(device)  # 新增：转到目标设备   
+        media_tensor = media_tensor.to(device)  # 新增：转到目标设备 
+        logger.debug(f"✅media_tensor(after to {device}) device: {media_tensor.device}")
+  
         conditioning_items.append(ConditioningItem(media_tensor, start_frame, strength))           # 媒体张量、开始帧、强度
+        logger.debug(f"✅媒体张量已转移到设备: {media_tensor.device}") 
 
     return conditioning_items
 
@@ -834,8 +857,15 @@ def load_media_file(
         media_tensor = load_image_to_tensor_with_resize_and_crop(
             media_path, height, width, just_crop=just_crop
         )
+        logger.debug(f"✅media_tensor(load img) device: {media_tensor.device}")
+
         media_tensor = torch.nn.functional.pad(media_tensor, padding)
-        logger.debug(f"✅媒体张量运行在: {media_tensor.device}")
+        logger.debug(f"✅media_tensor(after pad) device: {media_tensor.device}")
+
+        media_tensor = media_tensor.to('cuda:0')
+        logger.debug(f"✅媒体张量运行在: {media_tensor.device }")
+        logger.debug(f"✅media_tensor(final return) device: {media_tensor.device}")
+
     return media_tensor
 
 
