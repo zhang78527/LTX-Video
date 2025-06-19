@@ -1,4 +1,3 @@
-# Adapted from: https://github.com/huggingface/diffusers/blob/main/src/diffusers/pipelines/pixart_alpha/pipeline_pixart_alpha.py
 import copy
 import inspect
 import math
@@ -44,7 +43,6 @@ from ltx_video.models.autoencoders.vae_encode import (
     un_normalize_latents,
     normalize_latents,
 )
-
 
 try:
     import torch_xla.distributed.spmd as xs
@@ -126,7 +124,6 @@ ASPECT_RATIO_512_BIN = {
     "4.0": [1024.0, 256.0],
 }
 
-
 # 检索时间步骤
 def retrieve_timesteps(
     scheduler,
@@ -137,26 +134,6 @@ def retrieve_timesteps(
     skip_final_inference_steps: int = 0,
     **kwargs,
 ):
-    """
-    调用调度程序的"set_timesteps"方法 并在调用后从调度程序中检索时间步长，处理自定定义时间步长任何kwargs都将提供给"scheduler.set_timesteps".
-
-    参数:
-        scheduler (`SchedulerMixin`):
-            要从中获取时间步长的程序.
-        num_inference_steps (`int`):
-            使用预训练模型生成样本时的扩散步骤,如果使用
-            `timesteps` 必须为 `None`.
-        device (`str` or `torch.device`, *可选*):
-            时间步长应用到移动设备如果为None则不会移动时间步长.
-        timesteps (`List[int]`, *optional*):
-            用于支持时间步长的任意间距的自定定义时间步长,如果为None，则默认的使用调度器的时间步长间隔策略如果传递了timesteps,
-            则传递num_inference_steps必须为None`.
-        max_timestep ('float', *optional*, defaults to 1.0):
-            图像到图像/视频到视频的初始噪声级别，如果timestamp将为truncated以大于或等于this的时间戳开始
-
-    返回:
-        `元组[torch.Tensor, int]`: 一个元组,其中第一个元素来自调度器的时间步长调度,需第二个元素是推理步骤的数量.
-    """
     # 如果时间步长是没有
     if timesteps is not None:
         accepts_timesteps = "timesteps" in set(
@@ -192,19 +169,9 @@ def retrieve_timesteps(
 
     return timesteps, num_inference_steps
 
-
 @dataclass
 # 类调节项
 class ConditioningItem:
-    """
-    定义单个帧调节项 - 单个帧或帧序列。
-    属性:
-        media_item (torch.Tensor): shape=(b, 3, f, h, w). 张量：要设置条件的媒体项.
-        media_frame_number (int): 生成视频媒体项的起始帧号.
-        conditioning_strength (float): 调节的强度 (1.0 = 完全调节).
-        media_x (Optional[int]): 生成帧中媒体项的可选左x坐标.
-        media_y (Optional[int]): 生成帧中媒体项的可选项部y坐标.
-    """
 
     # torch.Tensor 是一种包含单一数据类型元素的多维矩阵
     media_item: torch.Tensor
@@ -215,24 +182,6 @@ class ConditioningItem:
 
 # 视频生成管道
 class LTXVideoPipeline(DiffusionPipeline):
-    r"""
-    使用LTX-Video生成文本到图像的管道.
-
-    This model inherits from [`DiffusionPipeline`]. Check the superclass documentation for the generic methods the
-    library implements for all the pipelines (such as downloading or saving, running on a particular device, etc.)
-
-    参数:
-        vae ([`AutoencoderKL`]):
-            变分自编码器 (VAE) 模型， 用于将图像编码与解码为潜在表示或从潜在表示中解码图像.
-        text_encoder ([`T5EncoderModel`]):
-            t5编码器
-        tokenizer (`T5Tokenizer`):
-            t5分词器
-        transformer ([`Transformer2DModel`]):
-            一个文本条件`Transformer2DModel` 对编码的图像潜在值进行降噪.
-        scheduler ([`SchedulerMixin`]):
-            与`transformer` 结合使用调度程序，用于对编码的图像潜在值进行降噪.
-    """
     # 再编译
     bad_punct_regex = re.compile(
         r"["
@@ -290,6 +239,10 @@ class LTXVideoPipeline(DiffusionPipeline):
             prompt_enhancer_llm_model=prompt_enhancer_llm_model,
             prompt_enhancer_llm_tokenizer=prompt_enhancer_llm_tokenizer,
         )
+        logger.debug(f"✅LTXVideoPipeline初始化，VAE: {vae}, device: {vae.device if hasattr(vae, 'device') else 'unknown'}")
+        logger.debug(f"✅LTXVideoPipeline初始化，Transformer: {transformer}, device: {transformer.device if hasattr(transformer, 'device') else 'unknown'}")
+        logger.debug(f"✅LTXVideoPipeline初始化，TextEncoder: {text_encoder}, device: {text_encoder.device if hasattr(text_encoder, 'device') else 'unknown'}")
+        logger.debug(f"✅LTXVideoPipeline初始化，Prompt增强模型: {prompt_enhancer_llm_model}, device: {prompt_enhancer_llm_model.device if hasattr(prompt_enhancer_llm_model, 'device') else 'unknown'}")
 
         self.video_scale_factor, self.vae_scale_factor, _ = get_vae_size_scale_factor(
             self.vae
@@ -321,27 +274,6 @@ class LTXVideoPipeline(DiffusionPipeline):
         text_encoder_max_tokens: int = 256,                                         # 文本编码最大令牌
         **kwargs,
     ):
-        r"""
-        将提示编码为文本编码器隐藏状态.
-
-        参数:
-            prompt (`str` or `List[str]`, *optional*):
-                提示词进行编码
-            negative_prompt (`str` or `List[str]`, *optional*):
-                提示不指导图像生成，如果不定义则必须传递"negative_prompt_embeds",相反，不使用"guidance"时忽略（即,如果"guidance_scale"小于"1"则忽略)
-                为这应该是""。
-            do_classifier_free_guidance (`bool`, *optional*, defaults to `True`):
-                是否使用classifier free 进行引导
-            num_images_per_prompt (`int`, *optional*, defaults to 1):
-                每个提示生成的图像数
-            device: (`torch.device`, *optional*):
-                torch device 放置生成的嵌入
-            prompt_embeds (`torch.FloatTensor`, *optional*):
-                预先生成的文本嵌入. 可用于轻松调整文本输入, *例如.* 提示符权重. 如果不是
-                前提是, 将从`prompt` 输入参数生成文本嵌入.
-            negative_prompt_embeds (`torch.FloatTensor`, *optional*):
-                预先生成的反正提示文本嵌入.
-        """
         # 警告信息mask_feature已被弃用，也不影响计算，在1.0.0版本后删除
         if "mask_feature" in kwargs:
             deprecation_message = "The use of `mask_feature` is deprecated. It is no longer used in any computation and that doesn't affect the end results. It will be removed in a future version."
@@ -641,7 +573,6 @@ class LTXVideoPipeline(DiffusionPipeline):
                 self.prompt_enhancer_llm_tokenizer is not None
             ), "Text prompt enhancer tokenizer must be initialized if enhance_prompt is True"
 
-
     # 文本预处理
     def _text_preprocessing(self, text):
         if not isinstance(text, (tuple, list)):
@@ -663,17 +594,12 @@ class LTXVideoPipeline(DiffusionPipeline):
         generator,
         eps=1e-6,
     ):
-        """
-        将依赖于时间步长的噪声添加到硬调节潜在噪声中.
-        这有助于运动的连续性，尤其是单个帧为条件时.
-        """
         noise = randn_tensor(
             latents.shape,
             generator=generator,
             device=latents.device,
             dtype=latents.dtype,
         )
-        # Add noise only to hard-conditioning latents (conditioning_mask = 1.0)
         need_to_noise = (conditioning_mask > 1.0 - eps).unsqueeze(-1)
         noised_latents = init_latents + noise_scale * noise * (t**2)
         latents = torch.where(need_to_noise, noised_latents, latents)
@@ -690,30 +616,6 @@ class LTXVideoPipeline(DiffusionPipeline):
         generator: torch.Generator | List[torch.Generator],
         vae_per_channel_normalize: bool = True,
     ):
-        """
-        准备要去噪的初始潜在张量.
-        The latents are either pure noise or a noised version of the encoded media items.
-        参数:
-            latents (`torch.FloatTensor` or `None`):
-                The latents to use (provided by the user) or `None` to create new latents.
-            media_items (`torch.FloatTensor` or `None`):
-                An image or video to be updated using img2img or vid2vid. The media item is encoded and noised.
-            timestep (`float`):
-                The timestep to noise the encoded media_items to.
-            latent_shape (`torch.Size`):
-                目标潜在的形状.
-            dtype (`torch.dtype`):
-                The target dtype.
-            device (`torch.device`):
-                目标设备.
-            generator (`torch.Generator` or `List[torch.Generator]`):
-                Generator(s) to be used for the noising process.
-            vae_per_channel_normalize ('bool'):
-                When encoding the media_items, whether to normalize the latents per-channel.
-        Returns:
-            `torch.FloatTensor`: The latents to be used for the denoising process. This is a tensor of shape
-            (batch_size, num_channels, height, width).
-        """
         if isinstance(generator, list) and len(generator) != latent_shape[0]:
             logger.debug(
                 f"你传递了一个长度(length) {len(generator)}, 但请求的是有效批处理"
@@ -862,85 +764,7 @@ class LTXVideoPipeline(DiffusionPipeline):
     ) -> Union[ImagePipelineOutput, Tuple]:
         """
         调用pipeline 进行生成时的函数.
-
-        参数:
-            prompt (`str` or `List[str]`, *optional*):
-                用于指导影像生成的提示，如果未定义，则必须传递原始提示词(prompt_embeds).
-                相反.
-            negative_prompt (`str` or `List[str]`, *optional*):
-                反向提示词The prompt or prompts not to guide the image generation. If not defined, one has to pass
-                `negative_prompt_embeds` instead. Ignored when not using guidance (i.e., ignored if `guidance_scale` is
-                less than `1`).
-            num_inference_steps (`int`, *optional*, defaults to 100):
-                降噪步骤数. More denoising steps usually lead to a higher quality image at the
-                expense of slower inference. If `timesteps` is provided, this parameter is ignored.
-            skip_initial_inference_steps (`int`, *optional*, defaults to 0):
-                要跳过的时间步骤. After calculating the timesteps, this number of timesteps will
-                be removed from the beginning of the timesteps list. Meaning the highest-timesteps values will not run.
-            skip_final_inference_steps (`int`, *optional*, defaults to 0):
-                要跳过的最终时间步数. After calculating the timesteps, this number of timesteps will
-                be removed from the end of the timesteps list. Meaning the lowest-timesteps values will not run.
-            timesteps (`List[int]`, *optional*):
-                用于降噪过程中的自定义时间步长. If not defined, equal spaced `num_inference_steps`
-                timesteps are used. Must be in descending order.
-            guidance_scale (`float`, *optional*, defaults to 4.5):
-                Guidance scale as defined in [Classifier-Free Diffusion Guidance](https://arxiv.org/abs/2207.12598).
-                `guidance_scale` is defined as `w` of equation 2. of [Imagen
-                Paper](https://arxiv.org/pdf/2205.11487.pdf). Guidance scale is enabled by setting `guidance_scale >
-                1`. Higher guidance scale encourages to generate images that are closely linked to the text `prompt`,
-                usually at the expense of lower image quality.
-            cfg_star_rescale (`bool`, *optional*, defaults to `False`):
-                如果设置为 `True`, 则应用 CFG 星形重缩放. Scales the negative prediction according to dot
-                product between positive and negative.
-            num_images_per_prompt (`int`, *optional*, defaults to 1):
-                每个提示生成的图像数.
-            height (`int`, *optional*, defaults to self.unet.config.sample_size):
-                生成图像高度.
-            width (`int`, *optional*, defaults to self.unet.config.sample_size):
-                生成图像宽度.
-            eta (`float`, *optional*, defaults to 0.0):
-                Corresponds to parameter eta (η) in the DDIM paper: https://arxiv.org/abs/2010.02502. Only applies to
-                [`schedulers.DDIMScheduler`], will be ignored for others.
-            generator (`torch.Generator` or `List[torch.Generator]`, *optional*):
-                One or a list of [torch generator(s)](https://pytorch.org/docs/stable/generated/torch.Generator.html)
-                to make generation deterministic.
-            latents (`torch.FloatTensor`, *optional*):
-                Pre-generated noisy latents, sampled from a Gaussian distribution, to be used as inputs for image
-                generation. Can be used to tweak the same generation with different prompts. If not provided, a latents
-                tensor will ge generated by sampling using the supplied random `generator`.
-            prompt_embeds (`torch.FloatTensor`, *optional*):
-                预先生成的文本嵌入. Can be used to easily tweak text inputs, *e.g.* prompt weighting. If not
-                provided, text embeddings will be generated from `prompt` input argument.
-            prompt_attention_mask (`torch.FloatTensor`, *optional*): 为文本嵌入预先生成的注意力掩码.
-            negative_prompt_embeds (`torch.FloatTensor`, *optional*):
-                负面提示词文本嵌入. This negative prompt should be "". If not
-                provided, negative_prompt_embeds will be generated from `negative_prompt` input argument.
-            negative_prompt_attention_mask (`torch.FloatTensor`, *optional*):
-                为负面提示生成注意力掩码.
-            output_type (`str`, *optional*, defaults to `"pil"`):
-                生成图像的格式. Choose between
-                [PIL](https://pillow.readthedocs.io/en/stable/): `PIL.Image.Image` or `np.array`.
-            return_dict (`bool`, *optional*, defaults to `True`):
-                Whether to return a [`~pipelines.stable_diffusion.IFPipelineOutput`] instead of a plain tuple.
-            callback_on_step_end (`Callable`, *optional*):
-                A function that calls at the end of each denoising steps during the inference. The function is called
-                with the following arguments: `callback_on_step_end(self: DiffusionPipeline, step: int, timestep: int,
-                callback_kwargs: Dict)`. `callback_kwargs` will include a list of all tensors as specified by
-                `callback_on_step_end_tensor_inputs`.
-            use_resolution_binning (`bool` defaults to `True`):
-                If set to `True`, the requested height and width are first mapped to the closest resolutions using
-                `ASPECT_RATIO_1024_BIN`. After the produced latents are decoded into images, they are resized back to
-                the requested resolution. Useful for generating non-square images.
-            enhance_prompt (`bool`, *optional*, defaults to `False`):
-                If set to `True`, the prompt is enhanced using a LLM model.
-            text_encoder_max_tokens (`int`, *optional*, defaults to `256`):
-                用于文本编码器的最在令牌数，默认为256.
-            stochastic_sampling (`bool`, *optional*, defaults to `False`):
-                如果设置为 `True`, 则采样是随机的. 如果设置为 `False`, 则采样是确定性的.
-            media_items ('torch.Tensor', *optional*):
-                用于图像到图像/视频到视频的输入媒体项.
         例子:
-
         返回:
             [`~pipelines.ImagePipelineOutput`] or `tuple`:
                 If `return_dict` is `True`, [`~pipelines.ImagePipelineOutput`] is returned, otherwise a `tuple` is
@@ -1036,9 +860,6 @@ class LTXVideoPipeline(DiffusionPipeline):
                 )
                 logger.debug(f"✅管道文件时间步长: {indices}")
 
-        # here `guidance_scale` is defined analog to the guidance weight `w` of equation (2)
-        # of the Imagen paper: https://arxiv.org/pdf/2205.11487.pdf . `guidance_scale = 1`
-        # corresponds to doing no classifier free guidance.
         if not isinstance(guidance_scale, List):
             guidance_scale = [guidance_scale] * len(timesteps)
         else:
@@ -1046,8 +867,6 @@ class LTXVideoPipeline(DiffusionPipeline):
                 guidance_scale[guidance_mapping[i]] for i in range(len(timesteps))
             ]
 
-        # For simplicity, we are using a constant num_conds for all timesteps, so we need to zero
-        # out cases where the guidance scale should not be applied.
         guidance_scale = [x if x > 1.0 else 0.0 for x in guidance_scale]
 
         if not isinstance(stg_scale, List):
@@ -1159,10 +978,11 @@ class LTXVideoPipeline(DiffusionPipeline):
                 ],
                 dim=0,
             )
-
-        # 4. 使用提供的介质和调节项准备初始 latent
-
-        # 准备初台潜在张量, shape = (b, c, f, h, w)
+        logger.debug(f"✅文本编码模型输出文本编码内容: {prompt_embeds}")
+        if negative_prompt_embeds is not None:
+            logger.debug(f"✅负面提示词编码内容: {negative_prompt_embeds}")
+ 
+        # 准备初台潜在张量, shape = (b, c, f, h, w),使用提供的介质和调节项准备初始 latent
         latents = self.prepare_latents(
             latents=latents,
             media_items=media_items,
@@ -1241,7 +1061,7 @@ class LTXVideoPipeline(DiffusionPipeline):
                     current_timestep = current_timestep[None].to(
                         latent_model_input.device
                     )
-                # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
+
                 current_timestep = current_timestep.expand(
                     latent_model_input.shape[0]
                 ).unsqueeze(-1)
@@ -1426,14 +1246,6 @@ class LTXVideoPipeline(DiffusionPipeline):
         t_eps=1e-6,
         stochastic_sampling=False,
     ):
-        """
-        Perform the denoising step for the required tokens, based on the current timestep and
-        conditioning mask:
-        Conditioning latents have an initial timestep and noising level of (1.0 - conditioning_mask)
-        and will start to be denoised when the current timestep is equal or lower than their
-        conditioning timestep.
-        (hard-conditioning latents with conditioning_mask = 1.0 are never denoised)
-        """
         logger.debug(f"✅去噪输入潜在变量设备: {latents.device}")
         logger.debug(f"✅噪声预测设备: {noise_pred.device}")
 
@@ -1465,35 +1277,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         vae_per_channel_normalize: bool = False,
         generator=None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
-        """
-        根据提供的条件贰准备 conditioning tokens.
 
-        此方法将提供条件项 (视频帧或单帧) 编码为 latents
-        并将他们与初始潜在张量（latent tensor）集成. 他还会计算相应的像素
-        坐标, 一个表示潜在的掩码，经及调节潜在物.
-
-        参数:
-            conditioning_items (Optional[List[ConditioningItem]]): ConditioningItem 对象列表.
-            init_latents (torch.Tensor): 形在为(b, c, f_l, h_l, w_l)的初始潜在张量, 其中
-                `f_l` 是潜在张量的数量, `h_l` 和 `w_l` 是潜在空间维度.
-            num_frames, height, width: 生成视频的尺寸.
-            vae_per_channel_normalize (bool, optional): 是否在VAE编码期间对通道进行归一化.
-                默认`False`.
-            generator: 随机生成器
-
-        Returns:
-            Tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
-                - `init_latents` (torch.Tensor): The updated latent tensor including conditioning latents,
-                  patchified into (b, n, c) shape.
-                - `init_pixel_coords` (torch.Tensor): The pixel coordinates corresponding to the updated
-                  latent tensor.
-                - `conditioning_mask` (torch.Tensor): A mask indicating the conditioning-strength of each
-                  latent token.
-                - `num_cond_latents` (int): The total number of latent tokens added from conditioning items.
-
-        Raises:
-            AssertionError: If input shapes, dimensions, or conditions for applying conditioning are invalid.
-        """
         assert isinstance(self.vae, CausalVideoAutoencoder)
 
         if conditioning_items:
@@ -1581,7 +1365,6 @@ class LTXVideoPipeline(DiffusionPipeline):
                             strength,
                         )
 
-
                     # 单帧或序列前缀潜在值
                     if media_item_latents is not None:
                         noise = randn_tensor(
@@ -1623,7 +1406,6 @@ class LTXVideoPipeline(DiffusionPipeline):
                         extra_conditioning_pixel_coords.append(pixel_coords)
                         extra_conditioning_mask.append(conditioning_mask)
 
-
         # 修补更新潜在值并计算他们的像素坐标
         init_latents, init_latent_coords = self.patchifier.patchify(
             latents=init_latents
@@ -1656,8 +1438,6 @@ class LTXVideoPipeline(DiffusionPipeline):
             )
 
             if self.transformer.use_tpu_flash_attention:
-                # When flash attention is used, keep the original number of tokens by removing
-                #   tokens from the end.
                 init_latents = init_latents[:, :-extra_conditioning_num_latents]
                 init_pixel_coords = init_pixel_coords[
                     :, :, :-extra_conditioning_num_latents
@@ -1672,7 +1452,6 @@ class LTXVideoPipeline(DiffusionPipeline):
             init_conditioning_mask,
             extra_conditioning_num_latents,
         )
-
 
     @staticmethod
     def _resize_conditioning_item(
@@ -1690,7 +1469,6 @@ class LTXVideoPipeline(DiffusionPipeline):
         )
         return new_conditioning_item
 
-
     # 获取条件项在潜在空间的空间位置
     def _get_latent_spatial_position(
         self,
@@ -1700,11 +1478,6 @@ class LTXVideoPipeline(DiffusionPipeline):
         width: int,
         strip_latent_border,
     ):
-        """
-        Get the spatial position of the conditioning item in the latent space.
-        If requested, strip the conditioning latent borders that do not align with target borders.
-        (border latents look different then other latents and might confuse the model)
-        """
         scale = self.vae_scale_factor
         h, w = conditioning_item.media_item.shape[-2:]
         assert (
@@ -1739,7 +1512,6 @@ class LTXVideoPipeline(DiffusionPipeline):
 
         return latents, x_start // scale, y_start // scale
 
-
     @staticmethod
     def _handle_non_first_conditioning_sequence(
         init_latents: torch.Tensor,
@@ -1751,32 +1523,11 @@ class LTXVideoPipeline(DiffusionPipeline):
         prefix_latents_mode: str = "concat",
         prefix_soft_conditioning_strength: float = 0.15,
     ):
-        """
-        Special handling for a conditioning sequence that does not start on the first frame.
-        The special handling is required to allow a short encoded video to be used as middle
-        (or last) sequence in a longer video.
-        Args:
-            init_latents (torch.Tensor): The initial noise latents to be updated.
-            init_conditioning_mask (torch.Tensor): The initial conditioning mask to be updated.
-            latents (torch.Tensor): The encoded conditioning item.
-            media_frame_number (int): The target frame number of the first frame in the conditioning sequence.
-            strength (float): The conditioning strength for the conditioning latents.
-            num_prefix_latent_frames (int, optional): The length of the sequence prefix, to be handled
-                separately. Defaults to 2.
-            prefix_latents_mode (str, optional): Special treatment for prefix (boundary) latents.
-                - "drop": Drop the prefix latents.
-                - "soft": Use the prefix latents, but with soft-conditioning
-                - "concat": Add the prefix latents as extra tokens (like single frames)
-            prefix_soft_conditioning_strength (float, optional): The strength of the soft-conditioning for
-                the prefix latents, relevant if `prefix_latents_mode` is "soft". Defaults to 0.1.
-
-        """
         f_l = latents.shape[2]
         f_l_p = num_prefix_latent_frames
         assert f_l >= f_l_p
         assert media_frame_number % 8 == 0
         if f_l > f_l_p:
-            # Insert the conditioning latents **excluding the prefix** into the sequence
             f_l_start = media_frame_number // 8 + f_l_p
             f_l_end = f_l_start + f_l - f_l_p
             init_latents[:, :, f_l_start:f_l_end] = torch.lerp(
@@ -1784,11 +1535,9 @@ class LTXVideoPipeline(DiffusionPipeline):
                 latents[:, :, f_l_p:],
                 strength,
             )
-            # Mark these latent frames as conditioning latents
             init_conditioning_mask[:, f_l_start:f_l_end] = strength
             logger.debug(f"✅管道文件完整数据: {strength}")
 
-        # Handle the prefix-latents
         if prefix_latents_mode == "soft":
             if f_l_p > 1:
                 # Drop the first (single-frame) latent and soft-condition the remaining prefix
@@ -1800,14 +1549,11 @@ class LTXVideoPipeline(DiffusionPipeline):
                     latents[:, :, 1:f_l_p],
                     strength,
                 )
-                # Mark these latent frames as conditioning latents
                 init_conditioning_mask[:, f_l_start:f_l_end] = strength
             latents = None  # No more latents to handle
         elif prefix_latents_mode == "drop":
-            # Drop the prefix latents
             latents = None
         elif prefix_latents_mode == "concat":
-            # Pass-on the prefix latents to be handled as extra conditioning frames
             latents = latents[:, :, :f_l_p]
         else:
             raise ValueError(f"Invalid prefix_latents_mode: {prefix_latents_mode}")
@@ -1817,21 +1563,9 @@ class LTXVideoPipeline(DiffusionPipeline):
             latents,
         )
 
-
     def trim_conditioning_sequence(
         self, start_frame: int, sequence_num_frames: int, target_num_frames: int
     ):
-        """
-        Trim a conditioning sequence to the allowed number of frames.
-
-        Args:
-            start_frame (int): The target frame number of the first frame in the sequence.
-            sequence_num_frames (int): The number of frames in the sequence.
-            target_num_frames (int): The target number of frames in the generated video.
-
-        Returns:
-            int: updated sequence length
-        """
         scale_factor = self.video_scale_factor
         num_frames = min(sequence_num_frames, target_num_frames - start_frame)
         # Trim down to a multiple of temporal_scale_factor frames plus 1
@@ -1843,19 +1577,6 @@ class LTXVideoPipeline(DiffusionPipeline):
 def adain_filter_latent(
     latents: torch.Tensor, reference_latents: torch.Tensor, factor=1.0
 ):
-    """
-    Applies Adaptive Instance Normalization (AdaIN) to a latent tensor based on
-    statistics from a reference latent tensor.
-
-    Args:
-        latent (torch.Tensor): Input latents to normalize
-        reference_latent (torch.Tensor): The reference latents providing style statistics.
-        factor (float): Blending factor between original and transformed latent.
-                       Range: -10.0 to 10.0, Default: 1.0
-
-    Returns:
-        torch.Tensor: The transformed latent tensor
-    """
     result = latents.clone()
 
     for i in range(latents.size(0)):
@@ -1893,7 +1614,6 @@ class LTXMultiScalePipeline:
         self.video_pipeline = video_pipeline
         self.vae = video_pipeline.vae
         self.latent_upsampler = latent_upsampler
-
 
     def __call__(
         self,
