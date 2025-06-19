@@ -463,15 +463,12 @@ def create_ltx_video_pipeline(
 
 def create_latent_upsampler(latent_upsampler_model_path: str, device: str):
     # 动态上采样器：采样器模型路径
-    try:
-        latent_upsampler = LatentUpsampler.from_pretrained(latent_upsampler_model_path)
-        logger.debug(f"✅上采样器加载成功: {latent_upsampler}") 
-        latent_upsampler.to(device) 
-        logger.debug(f"✅上采样器加载到设备: {device}")
-    except Exception as e:
-        logger.error(f"❌上采样器加载失败: {latent_upsampler_model_path}, error: {e}")
-
+    if not device or (isinstance(device, str) and device.strip() == ""):
+        device = get_device()
+    latent_upsampler = LatentUpsampler.from_pretrained(latent_upsampler_model_path)
+    latent_upsampler.to(device) 
     latent_upsampler.eval()
+    logger.debug(f"✅上采样器加载成功: {latent_upsampler}")
     return latent_upsampler
 
 # 定义推断
@@ -500,10 +497,18 @@ def infer(
     with open(pipeline_config, "r") as f:
         pipeline_config = yaml.safe_load(f)
         logger.debug(f"✅配置文件存在: {pipeline_config}")
+    # 修改：配置优先从外部传入，没有再从配置文件获取
+    guidance_scale = kwargs.get("guidance_scale") or pipeline_config.get("guidance_scale", 8)
+    stg_scale = kwargs.get("stg_scale") or pipeline_config.get("stg_scale", 7.5)
+    num_inference_steps = kwargs.get("num_inference_steps") or pipeline_config.get("num_inference_steps", 45)
+    decode_timestep = kwargs.get("decode_timestep") or pipeline_config.get("decode_timestep", 0.02)
+    decode_noise_scale = kwargs.get("decode_noise_scale") or pipeline_config.get("decode_noise_scale", 0.01)
+    prompt_enhancement_words_threshold = kwargs.get("prompt_enhancement_words_threshold") or pipeline_config.get("prompt_enhancement_words_threshold", 350)
+
                      
     models_dir = "MODEL_DIR"
 
-    ltxv_model_name_or_path = pipeline_config["checkpoint_path"]
+    ltxv_model_name_or_path = kwargs.get("checkpoint_path") or pipeline_config.get("checkpoint_path") # 修改先从外部传入中获取参数，没有再从配置文件中获取
     if not os.path.isfile(ltxv_model_name_or_path):
         ltxv_model_path = hf_hub_download(
             repo_id="Lightricks/LTX-Video",
@@ -515,22 +520,9 @@ def infer(
         ltxv_model_path = ltxv_model_name_or_path
         logger.debug(f"✅LTX-Video模型存在: {ltxv_model_path}")
 
-    # 从配置文件中加载图像放大模型
-    spatial_upscaler_model_name_or_path = pipeline_config.get(
-        "spatial_upscaler_model_path"
-    )
-    if spatial_upscaler_model_name_or_path and not os.path.isfile(
-        spatial_upscaler_model_name_or_path
-    ):
-        spatial_upscaler_model_path = hf_hub_download(
-            repo_id="Lightricks/LTX-Video",
-            filename=spatial_upscaler_model_name_or_path,
-            local_dir=models_dir,
-            repo_type="model",
-        )
-    else:
-        spatial_upscaler_model_path = spatial_upscaler_model_name_or_path
-        logger.debug(f"✅推理文件加载图像放大模型存在: {spatial_upscaler_model_path}")
+    # 修改加载图像放大上采样模型，先从外部参数中获取，没有获取成功再从配置文件中获取
+    spatial_upscaler_model_name_or_path = kwargs.get("spatial_upscaler_model_path") or pipeline_config.get("spatial_upscaler_model_path")
+    logger.debug(f"✅推理文件加载图像放大模型存在: {spatial_upscaler_model_path}")
 
     if kwargs.get("input_image_path", None):             # **kwargs代表关键字参数
         logger.warning(
@@ -610,15 +602,27 @@ def infer(
             f"Prompt has {prompt_word_count} words, which exceeds the threshold of {prompt_enhancement_words_threshold}. Prompt enhancement disabled."
         )
 
-    precision = pipeline_config["precision"]                                                       # 精度
-    text_encoder_model_name_or_path = pipeline_config["text_encoder_model_name_or_path"]           # 从配置文件中获取文本编码器模型路径
+    precision = pipeline_config["precision"]                                                       # 获取精度
+
+    # 修改：文本编码器优先从外部传入中获取，获取不成功再从配置文件中获取
+    text_encoder_model_name_or_path = (
+       kwargs.get("text_encoder_model_name_or_path")
+       or pipeline_config.get("text_encoder_model_name_or_path")
+    )
+
     sampler = pipeline_config["sampler"]                                                           # 从配置文件中获取采样器
-    prompt_enhancer_image_caption_model_name_or_path = pipeline_config[
-        "prompt_enhancer_image_caption_model_name_or_path"
-    ]
-    prompt_enhancer_llm_model_name_or_path = pipeline_config[
-        "prompt_enhancer_llm_model_name_or_path"
-    ]
+
+    # 修改：图像增强模型优先从外部传入获取，没有再从配置文件获取
+    prompt_enhancer_image_caption_model_name_or_path = (
+        kwargs.get("prompt_enhancer_image_caption_model_name_or_path")
+        or pipeline_config.get("prompt_enhancer_image_caption_model_name_or_path")
+    )
+
+    # 修改：文本增强模型优先从外部传入获取，没有再从配置文件中获取
+    prompt_enhancer_llm_model_name_or_path = (
+        kwargs.get("prompt_enhancer_llm_model_name_or_path")
+        or pipeline_config.get("prompt_enhancer_llm_model_name_or_path")
+    )
 
     # 管道等于视频生成管道构建管道字典
     pipeline = create_ltx_video_pipeline(
@@ -638,13 +642,16 @@ def infer(
             raise ValueError(
                 "spatial upscaler model path is missing from pipeline config file and is required for multi-scale rendering"
             )
-        # 图像放大模型潜在的上采样
-        latent_upsampler = create_latent_upsampler(
-            spatial_upscaler_model_path, pipeline.device
-        )
+        try:
+            # 图像放大模型潜在的上采样
+            latent_upsampler = create_latent_upsampler(
+                spatial_upscaler_model_path, pipeline.device
+            )
+            logger.debug(f"✅推理文件上采样设备：{pipeline.device}")
+        except Exception as e:
+            logger.error(f"❌上采样器加载失败: {spatial_upscaler_model_path}, error: {e}")
+            raise RuntimeError(f"Latent upsampler load failed: {e}")
         pipeline = LTXMultiScalePipeline(pipeline, latent_upsampler=latent_upsampler)
-        logger.debug(f"✅推理文件上采样设备：{pipeline.device}")
-
     logger.debug(f"✅即将推理，全部子模块设备状态：VAE({pipeline.vae.device}), Transformer({pipeline.transformer.device}), TextEncoder({pipeline.text_encoder.device}), ...")
 
     # 加载图像文件
