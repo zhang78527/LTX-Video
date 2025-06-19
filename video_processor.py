@@ -63,11 +63,11 @@ class VideoProcessor:
         self.pipeline_config = self.project_root / "models" / "LTX-Video" / "configs" / "ltxv-2b-0.9.5.yaml"
         if not os.path.isfile(self.pipeline_config):
             raise RuntimeError(f"pipeline_config 配置文件不存在: {self.pipeline_config}")        
-        print(f"文生视频权重文件存在: {self.checkpoint_path.exists()}") 
-        print(f"文本编码模型存在: {self.text_encoder_model.exists()}")
-        print(f"图像转文本模型存在: {self.image_caption_model.exists()}")
-        print(f"提示词增强模型存在: {self.prompt_enhancement_words.exists()}")
-        print(f"中英文翻译模型存在: {self.zh_en.exists()}")
+        logger.debug(f"文生视频权重文件存在: {self.checkpoint_path.exists()}") 
+        logger.debug(f"文本编码模型存在: {self.text_encoder_model.exists()}")
+        logger.debug(f"图像转文本模型存在: {self.image_caption_model.exists()}")
+        logger.debug(f"提示词增强模型存在: {self.prompt_enhancement_words.exists()}")
+        logger.debug(f"中英文翻译模型存在: {self.zh_en.exists()}")
 
     def _setup_data_manager(self):
         """配置数据管理器"""
@@ -96,14 +96,12 @@ class VideoProcessor:
         if data.get("source") != "generation_window":
             return
 
-        task_data = data.get("data", {})
-        print(f"文生视频接收执行数据成功: {task_data}")
-
         if data.get("action") != "execute":
             return
 
         # 3. 提取核心任务数据
         task_data = data.get("data", {})
+        logger.debug(f"✅文生视频接收执行数据成功: {task_data}")
         if not task_data:
             logger.error("任务数据为空")
             return
@@ -235,35 +233,39 @@ class VideoProcessor:
                 "output_path": str(self.output_dir),
                 "seed": 42,                                           # 种子
                 "pipeline_config": str(self.pipeline_config),
-                "image_cond_noise_scale": 0.4,                       # 条件图像的噪声缩放因子，控制条件图像对生成结果的影响强度。
+                "num_inference_steps": 40,                            # 去噪步数,值越大生成质量可能越高,但耗时增加,50 次去噪步骤,足以得到一个高质量图像
+                "image_cond_noise_scale": 0.10,                       # 条件图像的噪声缩放因子，控制条件图像对生成结果的影响强度。
                 "height": height_padded,
                 "width":  width_padded,
                 "num_frames": num_frames_padded,                       # 视频总帧数（若生成视频）从数据管理器传递过来的参数中自动获取
                 "frame_rate": frame_rate,                              #  视频帧率帧数为8的倍数加1，自动从数据管理器传递过来的参数中获取
                 "prompt": prompt,
-                "negative_prompt": "distorted, deformed, blurry, worst quality, jittery, mutated hands, extra limbs, disfigured, worst quality, jittery, flickering, inconsistent motion, watermark",
-                "offload_to_cpu": True, # 8G显卡强制CPU卸载
+                "negative_prompt": "distorted, deformed, blurry, low quality, mutated hands, extra limbs, disfigured, worst quality, jittery, flickering, inconsistent motion, watermark, text",
+                "offload_to_cpu": (gpu_mem_gb > 0 and gpu_mem_gb <= 8), # 8G显卡强制CPU卸载
+                "negative_prompt": negative_prompt
+
             }
 
             config = {
                 "pipeline_type": "base",
                 "num_images_per_prompt": 1,       # 每个提示词生成的图像/视频数量（此处为 1 个，可能用于测试或单样本生成）
-                "guidance_scale": 8,              # 控制文本提示词对生成结果的影响强度,值越大图像质量越好,7和8.5之间通常是稳定扩散的好选择
-                "stg_scale": 7.5,                   # 提示词引导系数。参数并不是越大越好，值为3时，与提示词相近，合理的值（7-10）
+                "guidance_scale": 8,            # 控制文本提示词对生成结果的影响强度,值越大图像质量越好,7和8.5之间通常是稳定扩散的好选择
+                "stg_scale": 8,                   # 提示词引导系数。参数并不是越大越好，值为3时，与提示词相近，合理的值（7-10）
                 "stg_rescale": 0.7,               # 缩放
                 "stg_mode": "attention_values",   # 模式 注意力机制
-                "stg_skip_layers": "19",       # 跳过某些网络层的索引（如跳过第 1、2、3 层，可能用于简化计算或定制生成效果）
-                "precision": "bfloat16",
-                "decode_timestep": 0.02,          # 解码过程的时间步长（控制生成过程的细粒度，值越小生成越精细但耗时增加）
-                "decode_noise_scale": 0.01,      # 解码阶段的噪声强度（影响生成结果的多样性与清晰度）。
+                "stg_skip_layers": "1,2,3",       # 跳过某些网络层的索引（如跳过第 1、2、3 层，可能用于简化计算或定制生成效果）
+                "precision": "float16",
+                "decode_timestep": 0.03,          # 解码过程的时间步长（控制生成过程的细粒度，值越小生成越精细但耗时增加）
+                "decode_noise_scale": 0.015,      # 解码阶段的噪声强度（影响生成结果的多样性与清晰度）。
+                "device": self.device,
                 "pipeline_config": str(self.pipeline_config.resolve()),                                       # 主模型配置文件路径
                 "checkpoint_path": str(self.checkpoint_path.resolve()),                                       # 主模型权重路径
                 "text_encoder_model_name_or_path": str(self.text_encoder_model.resolve()),                    # 文本编码模型路径
                 "prompt_enhancer_image_caption_model_name_or_path": str(self.image_caption_model.resolve()),  # 图像增强模型路径
                 "prompt_enhancer_llm_model_name_or_path": str(self.prompt_enhancement_words.resolve()),       # 提示词增强模型路径
-                "prompt_enhancement_words_threshold": 350,                                                    # 提示词限制
-                "stochastic_sampling": False,     # 启用随机采样：True生成结果随机性，但不可复现，False生成结果确定，适合测试可重复性
-                "sampler": "from_checkpoint"      # 采样器：从预训练模型中获取，ltx-video-2b-v0.9.5.safetensors
+                "prompt_enhancement_words_threshold": 120,                                                    # 提示词限制
+                "stochastic_sampling": False,
+                "sampler": "from_checkpoint"
             }
 
             # 4. 组装 conditioning_params
