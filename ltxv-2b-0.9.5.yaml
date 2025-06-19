@@ -1,19 +1,20 @@
 # coding=utf-8
 
-pipeline_type: base
-checkpoint_path: "models/ltx-video-2b-v0.9.5.safetensors"
-guidance_scale: 8
-stg_scale: 1
-rescaling_scale: 0.7
-skip_block_list: None
-num_inference_steps: 45
-stg_mode: "transformer_block" # options: "attention_values", "attention_skip", "residual", "transformer_block"
-decode_timestep: 0.02
+pipeline_type: multi-scale       # "multi-scale", "base" 
+checkpoint_path: "models/ltx-video-2b-v0.9.5.safetensors" 
+spatial_upscaler_model_path: "models/ltx-video-2b-v0.9.5.safetensors" 
+guidance_scale: 6                # 2-10
+stg_scale: 8  
+rescaling_scale: 1    
+skip_block_list: [19]      
+num_inference_steps: 40          # 1-50
+stg_mode: "transformer_block"    # options: "attention_values", "attention_skip", "residual", "transformer_block"
+decode_timestep: 0.02           
 decode_noise_scale: 0.01
 text_encoder_model_name_or_path: "models/t5"
 precision: "bfloat16"
-sampler: "from_checkpoint" # options: "uniform", "linear-quadratic", "from_checkpoint"
-prompt_enhancement_words_threshold: 350
+sampler: "from_checkpoint"       # options: "uniform", "linear-quadratic", "from_checkpoint"
+prompt_enhancement_words_threshold: 350      
 prompt_enhancer_image_caption_model_name_or_path: "models/Florence-2-base-PromptGen-v2.0"
 prompt_enhancer_llm_model_name_or_path: "models/Llama-3.2-1B-Instruct/intree"
-stochastic_sampling: false
+stochastic_sampling: false      
