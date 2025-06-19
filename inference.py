@@ -66,14 +66,6 @@ def load_image_to_tensor_with_resize_and_crop(
     target_width: int = 768,
     just_crop: bool = False,
 ) -> torch.Tensor:
-    """将图像加载并处理张量r.
-
-    参数:
-        image_input: 文件路径 (str) 或PIL Image 对象
-        target_height: 输出张量的所需高度r
-        target_width: 输出张量的所需宽度
-        just_crop: 如果为 True, 则仅将图像裁剪为目标大小，而不调整大小
-    """
     if isinstance(image_input, str):
         image = Image.open(image_input).convert("RGB")
     elif isinstance(image_input, Image.Image):
@@ -118,7 +110,6 @@ def load_image_to_tensor_with_resize_and_crop(
     frame_tensor = (frame_tensor / 127.5) - 1.0
     logger.debug(f"✅frame_tensor(after normalize) device: {frame_tensor.device}")
 
-    # 创建 5D 张量: (batch_size=1, channels=3, num_frames=1, height, width)
     result_tensor = frame_tensor.unsqueeze(0).unsqueeze(2)
     logger.debug(f"✅frame_tensor(final 5D) device: {result_tensor.device}")
     return result_tensor
@@ -127,17 +118,14 @@ def calculate_padding(
     source_height: int, source_width: int, target_height: int, target_width: int
 ) -> tuple[int, int, int, int]:
 
-    # 计算所需的总填充
     pad_height = target_height - source_height
     pad_width = target_width - source_width
 
-    # 计算每边的填充
     pad_top = pad_height // 2
     pad_bottom = pad_height - pad_top  # Handles odd padding
     pad_left = pad_width // 2
     pad_right = pad_width - pad_left  # Handles odd padding
 
-    # 返回的填充的张量，填充内边距格式为 (left, right, top, bottom)
     padding = (pad_left, pad_right, pad_top, pad_bottom)
     logger.debug(f"✅图像填充的完整数据: {padding}")
     return padding
@@ -148,15 +136,12 @@ def convert_prompt_to_filename(text: str, max_len: int = 20) -> str:
         char.lower() for char in text if char.isalpha() or char.isspace()
     )
 
-    # 拆分为单词
     words = clean_text.split()
 
-    # 跟踪长度的构建结果字符串
     result = []
     current_length = 0
 
     for word in words:
-        # 下划线加字长加 1 (第一个单词例外)
         new_length = current_length + len(word)
 
         if new_length <= max_len:
@@ -202,7 +187,6 @@ def main():
         description="Load models from separate directories and run the pipeline."
     )
 
-    # 目录
     parser.add_argument(
         "--output_path",
         type=str,
@@ -211,7 +195,6 @@ def main():
     )
     parser.add_argument("--seed", type=int, default="171198")
 
-    # Pipeline 参数
     parser.add_argument(
         "--num_images_per_prompt",
         type=int,
@@ -256,8 +239,6 @@ def main():
         default="configs/ltxv-2b-0.9.5.yaml",
         help="pipeline配置文件的路径, 其中包含pipeline的参数",
     )
-
-    # Prompts
     parser.add_argument(
         "--prompt",
         type=str,
@@ -269,22 +250,17 @@ def main():
         default="worst quality, inconsistent motion, blurry, jittery, distorted",
         help="对不需要的功能进行否定提示（负面提示词）",
     )
-
     parser.add_argument(
         "--offload_to_cpu",
         action="store_true",
         help="将不必要的计算卸载到 CPU.",
     )
-
-    # video-to-video 参数:
     parser.add_argument(
         "--input_media_path",
         type=str,
         default=None,
         help="要使用视频到视频pipeline修改的输入视频（或图像）的路径",
     )
-
-    # Conditioning arguments
     parser.add_argument(
         "--conditioning_media_paths",
         type=str,
@@ -321,11 +297,11 @@ def get_supported_precision():
 
 # 定义视频生成的管道
 def create_ltx_video_pipeline(
-    ckpt_path: str,                                    # 权重路径
-    precision: str,                                    # 精度
-    text_encoder_model_name_or_path: str,              # 文本编码器路径
-    sampler: Optional[str] = None,                     # 采样、自选（没有）
-    device: Optional[str] = None,            # 设备、自选（没有）
+    ckpt_path: str,                         # 权重路径
+    precision: str,                         # 精度
+    text_encoder_model_name_or_path: str,   # 文本编码器路径
+    sampler: Optional[str] = None,          # 采样、自选（没有）
+    device: Optional[str] = None,           # 设备、自选（没有）
     enhance_prompt: bool = False,
     prompt_enhancer_image_caption_model_name_or_path: Optional[str] = None,          # 提示图像增强模型路径
     prompt_enhancer_llm_model_name_or_path: Optional[str] = None,                    # 提示词增强模型路径
@@ -361,49 +337,96 @@ def create_ltx_video_pipeline(
         load_kwargs["device_map"] = {"": device or get_device()}
 
     # ===== 关键: from_pretrained 传递分片参数 =====
-    vae = CausalVideoAutoencoder.from_pretrained(str(ckpt_path), **load_kwargs)                 # 加载自动编码器
-    transformer = Transformer3DModel.from_pretrained(str(ckpt_path), **load_kwargs)             # 加载注意力机制模型transformer（含编码器与解码器）
+    try:
+        vae = CausalVideoAutoencoder.from_pretrained(str(ckpt_path), **load_kwargs)                 # 加载自动编码器
+        logger.debug(f"✅VAE模型加载成功: {ckpt_path}, device: {vae.device if hasattr(vae, 'device') else 'unknown'}")
+    except Exception as e:
+        logger.error(f"❌VAE模型加载失败：{ckpt_path}, error: {e}")
+    try:
+        transformer = Transformer3DModel.from_pretrained(str(ckpt_path), **load_kwargs)             # 加载注意力机制模型transformer（含编码器与解码器）
+        logger.debug(f"✅Transformer模型加载成功: {ckpt_path}, device: {transformer.device if hasattr(transformer, 'device') else 'unknown'}")
+    except Exception as e:
+        logger.error(f"❌Transformer模型加载失败：{ckpt_path}, error: {e}")
 
     # 如果指定了采样器则使用checkpoint，否则从本地加载采样器
-    if sampler == "from_checkpoint" or not sampler:                                            
-        scheduler = RectifiedFlowScheduler.from_pretrained(str(ckpt_path))                      # 调度程序加载模型
-    else:
-        scheduler = RectifiedFlowScheduler(
-            sampler=("Uniform" if sampler.lower() == "uniform" else "LinearQuadratic")
+    try:
+        if sampler == "from_checkpoint" or not sampler:                                            
+            scheduler = RectifiedFlowScheduler.from_pretrained(str(ckpt_path))
+            logger.debug(f"✅采样器Scheduler加载成功: {ckpt_path}")
+        else:
+            scheduler = RectifiedFlowScheduler(
+                sampler=("Uniform" if sampler.lower() == "uniform" else "LinearQuadratic")
+            )
+            logger.debug(f"✅采样器Scheduler加载成功(自定义): {ckpt_path}")
+    except Exception as e:
+        logger.error(f"❌采样器Scheduler加载失败：{ckpt_path}, error: {e}")
+
+    # 文本编碼器从T5模型加载
+    try:
+        text_encoder = T5EncoderModel.from_pretrained(text_encoder_model_name_or_path, subfolder="text_encoder")
+        logger.debug(
+            f"✅文本编码模型加载成功: {text_encoder_model_name_or_path}, "
+            f"device: {text_encoder.device if hasattr(text_encoder, 'device') else 'unknown'}"
         )
+    except Exception as e:
+        logger.error(f"❌文本编码模型加载失败: {text_encoder_model_name_or_path}, error: {e}")
 
-    # 文本编码器与tokenizer建议放CPU，除非有富余显存
-    text_encoder = T5EncoderModel.from_pretrained(                                               # 文本编碼器从T5模型加载
-        text_encoder_model_name_or_path, subfolder="text_encoder"                                # 文本编码器模型路径子文件夹text_encoder加载文本编码器
-    )
-    patchifier = SymmetricPatchifier(patch_size=1)                                                # 修补器
-    tokenizer = T5Tokenizer.from_pretrained(                                                      # 分词器从t5分词器加载
-        text_encoder_model_name_or_path, subfolder="tokenizer"                                    # 从文本编码器模型路径子文件夹tokenizer加载分诩器
-    )
+    patchifier = SymmetricPatchifier(patch_size=1)      # 修补器
 
-    transformer = transformer.to(device)                                                # 将注意力机制模型transformer转移到设备上
+    try: 
+        tokenizer = T5Tokenizer.from_pretrained(text_encoder_model_name_or_path, subfolder="tokenizer")
+        logger.debug(f"✅分词器加载成功: {text_encoder_model_name_or_path}")
+    except Exception as e:
+        logger.error(f"❌分词器加载失败: {text_encoder_model_name_or_path}, error: {e}")
+
+    transformer = transformer.to(device)      # 将注意力机制模型transformer转移到设备上
     logger.debug(f"✅transformer.to({device}) device: {next(transformer.parameters()).device}")
 
-    vae = vae.to(device)                                                                # 将自动编码器转移到设备上
+    vae = vae.to(device)                      # 将自动编码器转移到设备上
     logger.debug(f"✅vae.to({device}) device: {next(vae.parameters()).device}")
 
-    text_encoder = text_encoder.to(device)                                              # 将文本编码器转移到设备上
+    text_encoder = text_encoder.to(device)    # 将文本编码器转移到设备上
     logger.debug(f"✅text_encoder.to({device}) device: {next(text_encoder.parameters()).device}")
 
     if enhance_prompt:
-        prompt_enhancer_image_caption_model = AutoModelForCausalLM.from_pretrained(         # 图像提示增强模型
-            prompt_enhancer_image_caption_model_name_or_path, trust_remote_code=True
-        )
-        prompt_enhancer_image_caption_processor = AutoProcessor.from_pretrained(             # 图像提示增强处理器
-            prompt_enhancer_image_caption_model_name_or_path, trust_remote_code=True
-        )
-        prompt_enhancer_llm_model = AutoModelForCausalLM.from_pretrained(                    # 提示词增强模型
-            prompt_enhancer_llm_model_name_or_path,
-            torch_dtype="bfloat16",
-        )
-        prompt_enhancer_llm_tokenizer = AutoTokenizer.from_pretrained(                       # 提示词增强分词器从提示词增强模型加载
-            prompt_enhancer_llm_model_name_or_path,
-        )
+        try:
+            prompt_enhancer_image_caption_model = AutoModelForCausalLM.from_pretrained( 
+                prompt_enhancer_image_caption_model_name_or_path, trust_remote_code=True
+            )
+            logger.debug(
+                f"✅图像增强模型加载成功: {prompt_enhancer_image_caption_model_name_or_path},"
+                f"device: {prompt_enhancer_image_caption_model.device if hasattr(prompt_enhancer_image_caption_model, 'device') else 'unknown'}"
+            )
+        except Exception as e:
+            logger.error(f"❌图像增强模型加载失败: {prompt_enhancer_image_caption_model_name_or_path}, error: {e}")
+
+        try:
+            prompt_enhancer_image_caption_processor = AutoProcessor.from_pretrained(  
+                prompt_enhancer_image_caption_model_name_or_path, trust_remote_code=True
+            )
+            logger.debug(f"✅图像增强处理器加载成功: {prompt_enhancer_image_caption_model_name_or_path}")
+        except Exception as e:
+            logger.error(f"❌图像增强处理器加载失败: {prompt_enhancer_image_caption_model_name_or_path}, error: {e}")
+
+        try:
+            prompt_enhancer_llm_model = AutoModelForCausalLM.from_pretrained( 
+                prompt_enhancer_llm_model_name_or_path,
+                torch_dtype="bfloat16",
+            )
+            logger.debug(
+                f"✅提示词增强LLM语言模型加载成功: {prompt_enhancer_llm_model_name_or_path}," 
+                f"device: {prompt_enhancer_llm_model.device if hasattr(prompt_enhancer_llm_model, 'device') else 'unknown'}"
+            )
+        except Exception as e:
+            logger.error(f"❌提示词增强LLM语言模型加载失败: {prompt_enhancer_llm_model_name_or_path}, error: {e}")
+
+        try:
+            prompt_enhancer_llm_tokenizer = AutoTokenizer.from_pretrained( 
+                prompt_enhancer_llm_model_name_or_path,
+            )
+            logger.debug(f"✅提示词增强LLM分词器加载成功: {prompt_enhancer_llm_model_name_or_path}")
+        except Exception as e:
+            logger.error(f"❌提示词增强LLM分词器加载失败: {prompt_enhancer_llm_model_name_or_path}, error: {e}")
 
     else:
         prompt_enhancer_image_caption_model = None
@@ -433,16 +456,22 @@ def create_ltx_video_pipeline(
         "allowed_inference_steps": allowed_inference_steps,                                        # 允许的推理步数
     }
 
-    pipeline = LTXVideoPipeline(**submodel_dict)                                                  # 管道等于视频生成子模型字典
-    pipeline = pipeline.to(device)                                                                # 将管道转移到设备上
-    return pipeline                                                                               # 返回管道
+    pipeline = LTXVideoPipeline(**submodel_dict)      # 管道等于视频生成子模型字典
+    pipeline = pipeline.to(device)                    # 将管道转移到设备上
+    logger.debug(f"✅管道pipeline动行设备: {device}")
+    return pipeline                                    # 返回管道
 
-# 动态上采样器：采样器模型路径
 def create_latent_upsampler(latent_upsampler_model_path: str, device: str):
-    latent_upsampler = LatentUpsampler.from_pretrained(latent_upsampler_model_path)                # 上采样器模型路径加载
-    latent_upsampler.to(device)                                                                    # 将上采样器转移到设备上
+    # 动态上采样器：采样器模型路径
+    try:
+        latent_upsampler = LatentUpsampler.from_pretrained(latent_upsampler_model_path)
+        logger.debug(f"✅上采样器加载成功: {latent_upsampler}") 
+        latent_upsampler.to(device) 
+        logger.debug(f"✅上采样器加载到设备: {device}")
+    except Exception as e:
+        logger.error(f"❌上采样器加载失败: {latent_upsampler_model_path}, error: {e}")
+
     latent_upsampler.eval()
-    logger.debug(f"✅上采样器加载成功: {latent_upsampler}")
     return latent_upsampler
 
 # 定义推断
@@ -616,6 +645,8 @@ def infer(
         pipeline = LTXMultiScalePipeline(pipeline, latent_upsampler=latent_upsampler)
         logger.debug(f"✅推理文件上采样设备：{pipeline.device}")
 
+    logger.debug(f"✅即将推理，全部子模块设备状态：VAE({pipeline.vae.device}), Transformer({pipeline.transformer.device}), TextEncoder({pipeline.text_encoder.device}), ...")
+
     # 加载图像文件
     media_item = None
     if input_media_path:
@@ -644,8 +675,8 @@ def infer(
         if conditioning_media_paths
         else None
     )
-    if conditioning_items:                                                      # 添加
-        for idx, item in enumerate(conditioning_items):                         # 添加
+    if conditioning_items:   
+        for idx, item in enumerate(conditioning_items):  
             logger.debug(f"✅推理: 条件媒体 #{idx} device = {item.media_item.device}, target = {device}")
 
     # 注意力机制
@@ -699,7 +730,6 @@ def infer(
     ).images
     logger.debug(f"✅images (from pipeline) device: {images.device if hasattr(images, 'device') else 'Unknown'}")
 
-
     # 将填充的图像裁剪为所需的分辨率和帧数
     (pad_left, pad_right, pad_top, pad_bottom) = padding
     pad_bottom = -pad_bottom
@@ -748,6 +778,10 @@ def infer(
 
         logger.warning(f"Output saved to {output_filename}")
         logger.debug(f"✅输出文件名称: {output_filename}")
+    logger.debug(
+        f"✅LTXVideoPipeline创建成功，包含子模型: VAE({vae.device}),"
+        f"Transformer({transformer.device}), TextEncoder({text_encoder.device}), Scheduler, Tokenizer等"
+    )
 
 # 准备条件
 def prepare_conditioning(
@@ -761,20 +795,6 @@ def prepare_conditioning(
     pipeline: LTXVideoPipeline,
     device: str,  # 新增
 ) -> Optional[List[ConditioningItem]]:
-    """根据输入媒体路径及参数准备调节项.
-
-    参数:
-        conditioning_media_paths: 调节媒体(images or videos)的路径列表
-        conditioning_strengths: 每个媒体项的调节强度列表
-        conditioning_start_frames: 应用每个项目的帧索引列表
-        height: 输出帧的高度
-        width: 输出帧的宽度
-        num_frames: 输出视频中的帧数
-        padding: 要应用于框架的Padding
-        pipeline: 用于条件视频修剪的视频生成管道对像
-    返回:
-        ConditioningItem 对像列表.
-    """
     # 条件参数空列表
     conditioning_items = []
     for path, strength, start_frame in zip(
@@ -804,7 +824,7 @@ def prepare_conditioning(
         media_tensor = media_tensor.to(device)  # 新增：转到目标设备 
         logger.debug(f"✅media_tensor(after to {device}) device: {media_tensor.device}")
   
-        conditioning_items.append(ConditioningItem(media_tensor, start_frame, strength))           # 媒体张量、开始帧、强度
+        conditioning_items.append(ConditioningItem(media_tensor, start_frame, strength))   # 媒体张量、开始帧、强度
         logger.debug(f"✅媒体张量已转移到设备: {media_tensor.device}") 
 
     return conditioning_items
@@ -821,7 +841,6 @@ def get_media_num_frames(media_path: str) -> int:
         reader.close()
         logger.debug(f"✅媒体帧参数: {media_num_frames}")
     return num_frames
-
 
 # 加载媒体文件
 def load_media_file(
@@ -867,7 +886,6 @@ def load_media_file(
         logger.debug(f"✅media_tensor(final return) device: {media_tensor.device}")
 
     return media_tensor
-
 
 if __name__ == "__main__":
     main()
