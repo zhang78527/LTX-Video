@@ -239,10 +239,6 @@ class LTXVideoPipeline(DiffusionPipeline):
             prompt_enhancer_llm_model=prompt_enhancer_llm_model,
             prompt_enhancer_llm_tokenizer=prompt_enhancer_llm_tokenizer,
         )
-        logger.debug(f"✅LTXVideoPipeline初始化，VAE: {vae}, device: {vae.device if hasattr(vae, 'device') else 'unknown'}")
-        logger.debug(f"✅LTXVideoPipeline初始化，Transformer: {transformer}, device: {transformer.device if hasattr(transformer, 'device') else 'unknown'}")
-        logger.debug(f"✅LTXVideoPipeline初始化，TextEncoder: {text_encoder}, device: {text_encoder.device if hasattr(text_encoder, 'device') else 'unknown'}")
-        logger.debug(f"✅LTXVideoPipeline初始化，Prompt增强模型: {prompt_enhancer_llm_model}, device: {prompt_enhancer_llm_model.device if hasattr(prompt_enhancer_llm_model, 'device') else 'unknown'}")
 
         self.video_scale_factor, self.vae_scale_factor, _ = get_vae_size_scale_factor(
             self.vae
