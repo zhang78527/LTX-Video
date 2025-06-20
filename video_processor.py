@@ -57,7 +57,7 @@ class VideoProcessor:
         self.image_caption_model = self.project_root / "models" / "Florence-2-base-PromptGen-v2.0" 
         self.prompt_enhancement_words = self.project_root / "models" / "Llama-3.2-1B-Instruct" / "intree"
         self.zh_en = self.project_root / "models" / "opus-mt-zh-en"
-        self.spatial_upscaler_model_path = self.project_root / "models" / "ltx-video-2b-v0.9.5.safetensors"
+        self.spatial_upscaler_model_path = self.project_root / "models" / "ltxv-spatial-upscaler-0.9.7.safetensors"
 
         self.inference_path = self.project_root / "models " / "LTX-Video"/ "inference.py"                            
         self.pipeline_type = self.project_root / "models" / "LTX-Video" / "ltx_video\pipelines"/ "pipeline_ltx_video.py" 
@@ -259,12 +259,11 @@ class VideoProcessor:
                 "decode_timestep": 0.03,          # 解码过程的时间步长（控制生成过程的细粒度，值越小生成越精细但耗时增加）
                 "decode_noise_scale": 0.015,      # 解码阶段的噪声强度（影响生成结果的多样性与清晰度）。
                 "device": self.device,
-                "pipeline_config": str(self.pipeline_config.resolve()),                                       # 主模型配置文件路径
-                "checkpoint_path": str(self.checkpoint_path.resolve()),                                       # 主模型权重路径
-                "text_encoder_model_name_or_path": str(self.text_encoder_model.resolve()),                    # 文本编码模型路径
-                "prompt_enhancer_image_caption_model_name_or_path": str(self.image_caption_model.resolve()),  # 图像增强模型路径
-                "prompt_enhancer_llm_model_name_or_path": str(self.prompt_enhancement_words.resolve()),       # 提示词增强模型路径
-                "spatial_upscaler_model_path": str(self.spatial_upscaler_model_path.resolve()),
+                "checkpoint_path": str(self.checkpoint_path),                                       # 主模型权重路径
+                "text_encoder_model_name_or_path": str(self.text_encoder_model),                    # 文本编码模型路径
+                "prompt_enhancer_image_caption_model_name_or_path": str(self.image_caption_model),  # 图像增强模型路径
+                "prompt_enhancer_llm_model_name_or_path": str(self.prompt_enhancement_words),       # 提示词增强模型路径
+                "spatial_upscaler_model_path": str(self.spatial_upscaler_model_path),
                 "prompt_enhancement_words_threshold": 120,                                                    # 提示词限制
                 "stochastic_sampling": False,
                 "sampler": "from_checkpoint"
