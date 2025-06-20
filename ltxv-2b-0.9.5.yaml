@@ -1,69 +1,320 @@
-LTX Video 2B 0.9.5 (襆TXV?
-By Lightricks Ltd. (襆ightricks?
-Open RAIL-M License 
-dated March 5, 2025
-
-Section I: PREAMBLE
-Multimodal generative models are being widely adopted and used, and have the potential to transform the way artists, among other individuals, conceive and benefit from artificial intelligence (褹I? or ML technologies as a tool for content creation. Notwithstanding the current and potential benefits that these artifacts can bring to society at large, there are also concerns about potential misuses of them, either due to their technical limitations or ethical considerations.
-The development and use of AI does not come without concerns. The world has witnessed how AI techniques may, in some instances, become risky for the public in general. These risks come in many forms, from racial discrimination to the misuse of sensitive information.
-This Open RAIL-M License is generally applicable to any machine-learning Model (as defined below). While this License (as defined below) allows commercia use of the Model, the 襌AIL?nomenclature indicates that there are use restrictions prohibiting the use of the Model. These restrictions are intended to avoid potential misuse by not permitting the use of the Model in very specific scenarios, in order for the Licensor to be able to enforce the license in case a potential misuse of the Model may occur. Even though derivative versions of the Model could be released under different licensing terms, the License (as defined below) specifies that the use restrictions in the original License must apply to such derivative versions. Lightricks believes in the intersection between open and responsible AI development; thus, this License aims to strike a balance between both in order to enable responsible open-science in the field of AI. This License governs the use of the Model (and its derivatives) and is informed by the model card associated with the Model.
-
-NOW THEREFORE, You and Licensor agree as follows:
-1. Definitions
-1.1. 褻omplementary Material?means the accompanying source code and scripts used to define, run, load, benchmark or evaluate the Model, and used to prepare data for training or evaluation, if any. This includes any accompanying documentation, tutorials, examples, etc., if any.
-1.2. 褻ontribution?means any work of authorship, including the original version of the Model and any modifications or additions to that Model or Derivatives of the Model thereof, that is intentionally submitted to Licensor for inclusion in the Model by the copyright owner or by an individual or legal entity authorized to submit on behalf of the copyright owner. For the purposes of this definition, 襰ubmitted?means any form of electronic, verbal, or written communication sent to the Licensor or its representatives, including but not limited to communication on electronic mailing lists, source code control systems, and issue tracking systems that are managed by, or on behalf of, the Licensor for the purpose of discussing and improving the Model, but excluding communication that is conspicuously marked or otherwise designated in writing by the copyright owner as 襈ot a Contribution?
-1.3. 褻ontributor?means Licensor and any individual or legal entity on behalf of whom a Contribution has been received by Licensor and subsequently incorporated within the Model.
-1.4. 褼ata?means a collection of information and/or content extracted from the dataset used with the Model, including to train, pretrain, or otherwise evaluate the Model. The Data is not licensed under this License.
-1.5. 褼erivatives of the Model?means all modifications to the Model, works based on the Model, or any other model which is created or initialized by transfer of patterns of the weights, parameters, activations or output of the Model, to the other model, in order to cause the other model to perform similarly to the Model, including h ?but not limited to - distillation methods entailing the use of intermediate data representations or methods based on the generation of synthetic data by the Model for training the other model.
-1.6. 褼istribution?means any transmission, reproduction, publication or other sharing of the Model or Derivatives of the Model to a third party, including providing the Model as a hosted service made available by electronic or other remote means - e.g. API-based or web access.
-1.7. 襀arm?includes but is not limited to physical, mental, psychological, financial and reputational damage, pain, or loss.
-1.8. 襆icense?means the terms and conditions for use, reproduction, and Distribution as defined in this document.
-1.9. 襆icensor?means the copyright owner or entity authorized by the copyright owner that is granting the License, including the persons or entities that may have rights in the Model and/or distributing the Model. For the purposes of this License, the Licensor is Lightricks Ltd.
-1.10. 襇odel?means any accompanying machine-learning based assemblies (including checkpoints), consisting of learnt weights, parameters (including optimizer states), corresponding to the Lightricks?Model 襆TX Video 2B 0.9.5?model architecture as embodied in the Complementary Material, that have been trained or tuned, in whole or in part on the Data, using the Complementary Material.
-1.11. 襉utput?means the results of operating a Model as embodied in informational content resulting therefrom.
-1.12. 襎hird Parties?means individuals or legal entities that are not under common control with Licensor or You.
-1.13. 襓ou?(or 襓our? means an individual or legal entity exercising permissions granted by this License and/or making use of the Model for whichever purpose and in any field of use, including usage of the Model in an end-use application - e.g. chatbot, translator, image generator.
-	
-Section II: INTELLECTUAL PROPERTY RIGHTS
-Both copyright and patent grants apply to the Model, Derivatives of the Model and Complementary Material. The Model and Derivatives of the Model are subject to additional terms as described in Section III, which shall govern the use of the Model and Derivatives of the Model even in the event Section II is held unenforceable.
-2. Grant of Copyright License. Subject to the terms and conditions of this License, each Contributor hereby grants to You a perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable copyright license to reproduce, prepare, publicly display, publicly perform, sublicense, and distribute the Complementary Material, the Model, and Derivatives of the Model.
-3. Grant of Patent License. Subject to the terms and conditions of this License and where and as applicable, each Contributor hereby grants to You a perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable (except as stated in this paragraph) patent license to make, have made, use, offer to sell, sell, import, and otherwise transfer the Model and the Complementary Material, where such license applies only to those patent claims licensable by such Contributor that are necessarily infringed by their Contribution(s) alone or by combination of their Contribution(s) with the Model to which such Contribution(s) was submitted. If You institute patent litigation against any entity (including a cross-claim or counterclaim in a lawsuit) alleging that the Model and/or Complementary Material or a Contribution incorporated within the Model and/or Complementary Material constitutes direct or contributory patent infringement, then any patent licenses granted to You under this License for the Model and/or Complementary Materials shall terminate as of the date such litigation is asserted or filed.
-
-Section III: CONDITIONS OF USAGE, DISTRIBUTION AND REDISTRIBUTION
-4. Distribution and Redistribution. You may host for Third Party remote access purposes (e.g. software-as-a-service), reproduce and distribute copies of the Model or Derivatives of the Model thereof in any medium, with or without modifications, provided that You meet the following conditions:
-4.1. Use-based restrictions as referenced in paragraph 5 MUST be included as an enforceable provision by You in any type of legal agreement (e.g. a license) governing the use and/or distribution of the Model or Derivatives of the Model, and You shall give notice to subsequent users You Distribute to, that the Model or Derivatives of the Model are subject to paragraph 5. This provision does not apply to the use of Complementary Material.
-4.2. You must give any Third Party recipients of the Model or Derivatives of the Model a copy of this License;
-4.3. You must cause any modified files to carry prominent notices stating that You changed the files;
-4.4. You must retain all copyright, patent, trademark, and attribution notices excluding those notices that do not pertain to any part of the Model, Derivatives of the Model.
-You may add Your own copyright statement to Your modifications and may provide additional or different license terms and conditions - respecting paragraph 4.1 - for use, reproduction, or Distribution of Your modifications, or for any such Derivatives of the Model as a whole, provided Your use, reproduction, and Distribution of the Model otherwise complies with the conditions stated in this License.
-5. Use-based restrictions. The restrictions set forth in Attachment A are considered Use-based restrictions. Therefore, You cannot use the Model and the Derivatives of the Model in violation of the specified restricted uses. You may use the Model subject to this License, including only for lawful purposes and in accordance with the License. 襏se?may include creating any content with, fine-tuning, updating, running, training, evaluating and/or re-parametrizing the Model. You shall require all of Your users who use the Model or a Derivative of the Model to comply with the terms of this paragraph 5.?6. The Output You Generate. Except as set forth herein, Licensor claims no rights in the Output You generate using the Model. You are accountable for input you insert into the Model, the Output you generate and its subsequent uses. No use of the Output can contravene any provision as stated in the License.
-
-Section IV: OTHER PROVISIONS
-7. Updates and Runtime Restrictions. To the maximum extent permitted by law, Licensor reserves the right to restrict (remotely or otherwise) usage of the Model in violation of this License, update the Model through electronic means, or modify the Output of the Model based on updates. You shall undertake reasonable efforts to use the latest version of the Model.  Any use of the non-current version of the Model is done solely at your risk.
-8. Trademarks and related. Nothing in this License permits You to make use of Licensor誷 trademarks, trade names, logos or to otherwise suggest endorsement or misrepresent the relationship between the parties; and any rights not expressly granted herein are reserved by the Licensor.
-9. Disclaimer of Warranty. Unless required by applicable law or agreed to in writing, Licensor provides the Model and the Complementary Material (and each Contributor provides its Contributions) on an 褹S IS?BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied, including, without limitation, any warranties or conditions of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A PARTICULAR PURPOSE. You are solely responsible for determining the appropriateness of using or redistributing the Model, Derivatives of the Model, and the Complementary Material and assume any risks associated with Your exercise of permissions under this License.
-10. Limitation of Liability. In no event and under no legal theory, whether in tort (including negligence), contract, or otherwise, unless required by applicable law (such as deliberate and grossly negligent acts) or agreed to in writing, shall any Contributor be liable to You for damages, including any direct, indirect, special, incidental, or consequential damages of any character arising as a result of this License or out of the use or inability to use the Model and the Complementary Material (including but not limited to damages for loss of goodwill, work stoppage, computer failure or malfunction, or any and all other commercial damages or losses), even if such Contributor has been advised of the possibility of such damages.
-11. Accepting Warranty or Additional Liability. While redistributing the Model, Derivatives of the Model and the Complementary Material thereof, You may choose to offer and charge a fee for, acceptance of support, warranty, indemnity, or other liability obligations and/or rights consistent with this License. However, in accepting such obligations, You may act only on Your own behalf and on Your sole responsibility, not on behalf of any other Contributor, and only if You agree to indemnify, defend, and hold each Contributor harmless for any liability incurred by, or claims asserted against such Contributor, by reason of your accepting any such warranty or additional liability.
-12. If any provision of this License is held to be invalid, illegal or unenforceable, the remaining provisions shall be unaffected thereby and remain valid as if such provision had not been set forth herein.
-END OF TERMS AND CONDITIONS
-
-Attachment A 
-Use Restrictions
-You agree not to use the Model or its Derivatives in any of the following ways:
-(a) Outside of the Permitted Purpose;
-(a) In any way that violates any applicable national, federal, state, local or international law or regulation;
-(b) For the purpose of exploiting, Harming or attempting to exploit or Harm minors in any way;
-(c) To generate or disseminate false information and/or content with the purpose of Harming others;
-(d) To generate or disseminate personal identifiable information that can be used to Harm an individual;
-(e) To generate or disseminate information and/or content (e.g. images, code, posts, articles), and place the information and/or content in any context (e.g. bot generating tweets) without expressly and intelligibly disclaiming that the information and/or content is machine generated;
-(f) To defame, disparage or otherwise harass others;
-(g) To impersonate or attempt to impersonate (e.g. deepfakes) others without their consent;
-(h) For fully automated decision making that adversely impacts an individual誷 legal rights or otherwise creates or modifies a binding, enforceable obligation;
-(i) For any use intended to or which has the effect of discriminating against or Harming individuals or groups based on online or offline social behavior or known or predicted personal or personality characteristics;
-(j) To exploit any of the vulnerabilities of a specific group of persons based on their age, social, physical or mental characteristics, in order to materially distort the behavior of a person pertaining to that group in a manner that causes or is likely to cause that person or another person physical or psychological Harm;
-(k) For any use intended to or which has the effect of discriminating against individuals or groups based on legally protected characteristics or categories;
-(l) To provide medical advice and medical results interpretation;
-(m) To generate or disseminate information for the purpose to be used for administration of justice, law enforcement, immigration or asylum processes, such as predicting an individual will commit fraud/crime commitment (e.g. by text profiling, drawing causal relationships between assertions made in documents, indiscriminate and arbitrarily-targeted use);
-(n) To generate and/or disseminate malware (including ?but not limited to ?ransomware) or any other content to be used for the purpose of harming electronic systems;
-(o) To engage in, promote, incite, or facilitate discrimination or other unlawful of harmful conduct in the provision of employment, employment benefits, credit, housing, or other essential goods and services;
-(p) To engage in, promote, incite, or facilitate the harassment, abuse, threatening, or bullying of individuals or groups of individuals.
+LTX-Video: Realtime Video Latent Diffusion
+Yoav HaCohen Nisan Chiprut Benny Brazowski Daniel Shalem
+Dudu Moshe Eitan Richardson Eran Levin Guy Shiran
+Nir Zabari Ori Gordon Poriya Panet Sapir Weissbuch
+Victor Kulikov Yaki Bitterman Zeev Melumian Ofir Bibi∗
+Lightricks
+ltx-video@lightricks.com
+Abstract
+We introduce LTX-Video, a transformer-based latent diffusion model that adopts a
+holistic approach to video generation by seamlessly integrating the responsibilities
+of the Video-VAE and the denoising transformer. Unlike existing methods, which
+treat these components as independent, LTX-Video aims to optimize their interaction
+for improved efficiency and quality. At its core is a carefully designed Video-VAE
+that achieves a high compression ratio of 1:192, with spatiotemporal downscaling
+of 32×32×8 pixels per token, enabled by relocating the patchifying operation from
+the transformer’s input to the VAE’s input. Operating in this highly compressed
+latent space enables the transformer to efficiently perform full spatiotemporal self-
+attention, which is essential for generating high-resolution videos with temporal
+consistency. However, the high compression inherently limits the representation of
+fine details. To address this, our VAE decoder is tasked with both latent-to-pixel
+conversion and the final denoising step, producing the clean result directly in pixel
+space. This approach preserves the ability to generate fine details without incurring
+the runtime cost of a separate upsampling module. Our model supports diverse use
+cases, including text-to-video and image-to-video generation, with both capabilities
+trained simultaneously. It achieves faster-than-real-time generation, producing 5
+seconds of 24 fps video at 768×512 resolution in just 2 seconds on an Nvidia H100
+GPU, outperforming all existing models of similar scale. The source code and
+pre-trained models are publicly available2, setting a new benchmark for accessible
+and scalable video generation.
+1 Introduction
+The rise of text-to-video models such as Sora [ 1 ], MovieGen [ 2], CogVideoX [ 3 ], Open-Sora Plan [4]
+and PyramidFlow [5] has demonstrated the effectiveness of spatiotemporal transformers with self-
+attention and a global receptive field, coupled with 3D VAEs for spatiotemporal compression. While
+these approaches validate the fundamental architectural choices, they often rely on conventional VAE
+designs that may not optimally balance spatial and temporal compression.
+Concurrently with our work, DC-VAE [ 6] demonstrated that text-to-image transformer-based diffusion
+models perform more effectively when paired with VAEs that employ higher spatial compression
+factors and a high dimensional latent spaces with up to 64 channels. However, extending this approach
+to video presents significant challenges.
+∗Authors are listed with project leads first, followed by the team in alphabetical order, and concluding with
+senior management.
+2https://github.com/Lightricks/LTX-Video.
+arXiv:2501.00103v1 [cs.CV] 30 Dec 2024
+“A young man with blond hair wearing a yellow jacket stands in a forest and looks around. He has light skin and his hair is styled with a middle
+part. He looks to the left and then to the right, his gaze lingering in each direction. The camera angle is low, looking up at the man, and remains
+stationary throughout the video. The background is slightly out of focus, with green trees and the sun shining brightly behind the man. The
+lighting is natural and warm, with the sun creating a lens flare that moves across the man’s face. The scene is captured in real-life footage.”
+Figure 1: Text-to-video (first row) and image-to-video samples (last 2 rows, conditioned on the left
+frame) generated by LTX-Video, highlighting our model’s high level of prompt adherence, visual
+quality and motion fidelity. Each row shows evenly-spaced frames from a generated 5-second video.
+Inspired by these developments and the success of diffusion models in generating high-resolution
+images and video, we propose LTX-Video, a transformer-based latent diffusion model that equally
+prioritizes both spatial and temporal dimensions. Our approach features a carefully designed VAE
+architecture that achieves higher spatial compression while maintaining video quality through an
+increased latent depth of 128 channels. This design choice not only enables more efficient processing
+of video data but also results in a highly performant 3D VAE implementation.
+Latent diffusion models trade the ability to apply pixel-level training loss for improved training effi-
+ciency, often at the expense of generating plausible high-frequency details. Sora [1] and MovieGen [2]
+mitigate this limitation by applying a second-stage diffusion model for generating the high-resolution
+output. Pixel-loss [ 7] attempt to address this issue by incorporating pixel-level loss on VAE-decoded
+noisy latents, but retained the entire generation process within the limits of the compressed latent
+space. In contrast, we propose tasking the VAE decoder with performing the last denoising step in
+conjunction with converting latents to pixels. This modification is particularly impactful at high latent
+compression rates, where not all high-frequency details can be reconstructed and must instead be
+generated.
+We adopt the scalable and flexible transformer architecture, known for its effectiveness in various
+applications, enabling our model to generate images and videos across a range of sizes and durations.
+Building upon Pixart-α [ 8]’s architecture, which extends the DiT [ 9] framework to be conditioned
+on open text inputs rather than constrained to ImageNet class labels, we introduce several key
+enhancements. Specifically, we replace traditional absolute positional embeddings with Rotary
+Positional Embeddings (RoPE [10 ]) enhanced by normalized fractional coordinates, which improve
+spatial and temporal coherence in video generation. Additionally, we normalize the key and query
+tensors to stabilize attention computations, enhancing robustness and increasing the entropy of
+attention weights. Our approach addresses limitations in existing models, offering a more integrated
+and efficient solution for robust video generation.
+Our model is the fastest video generation model of its kind, capable of generating videos faster
+than the time it takes to watch them (2 seconds to generate 121 frames at 768 × 512 pixels and 20
+diffusion steps on an Nvidia H100 GPU), while outperforming all available models of similar scale
+(2B parameters, before distillation).
+2
+In addition to text-to-video generation, we extend our model’s functionality to handle image-to-video,
+a practical application in content creation. Through a simple timestep-based conditioning mechanism,
+the model can be conditioned on any part of the input video without requiring additional parameters
+or special tokens.
+See Fig 1 for text-to-video and image-to-video samples generated by LTX-Video. Additional samples
+are provided in figures 18 and 19.
+Our main contributions are:
+• A holistic approach to latent diffusion: LTX-Video seamlessly integrates the Video-VAE
+and the denoising transformer, optimizing their interaction within a compressed latent space
+and sharing the denoising objective between the transformer and the VAE’s decoder.
+• High-compression Video-VAE leveraging novel loss functions: By relocating the patchi-
+fying operation to the VAE and introducing novel loss functions, we achieve a 1:192 com-
+pression ratio with spatiotemporal downsampling of 32 × 32 × 8, enabling the generation
+of high-quality videos at unprecedented speed.
+• LTX-Video – A fast, accessible, and high-quality video generation model: We train and
+evaluate our enhanced diffusion-transformer architecture and publicly release LTX-Video, a
+faster-than-real-time text-to-video and image-to-video model with fewer than 2B parameters.
+2 Method
+To facilitate the faster-than-realtime operation of LTX-Video while maintaining high visual quality,
+motion fidelity, and prompt adherence, we employ a holistic approach to latent diffusion, optimizing
+the interaction between the Video VAE and the diffusion-transformer. We utilize a high-dimensional
+latent space with a high compression rate of 1:192 and spatiotemporal downsampling of 32 × 32 × 8.
+To support the generation of high-frequency details, we assign the VAE decoder the task of performing
+the last denoising step alongside converting the latents to pixels, as illustrated in Fig 2.
+Figure 2: LTX-Video holistic denoising strategy – latent-to-latent diffusion denoising steps + final
+latent-to-pixels denoising step.
+Our holistic approach, along with key design changes in the Video VAE architecture, loss functions,
+and in the diffusion-transformer architecture, enable generating high quality videos despite the high
+pixels-to-tokens ratio. These enhancements, which were crucial to the success of our approach, are
+highlighted in the following sections.
+2.1 Video VAE
+Operating in a compressed latent space is key to the success of text-to-video diffusion-transformer
+models: training and inference time for these models is dominated by the number of tokens (the
+attention operation is quadratic in the number of tokens), while the diffusion process benefits from the
+compressed latent representation, as it decreases the inherent information redundancy of the original
+signal (SimpleDiffusion [11], SD3 [12]).
+Recent text-to-video models (CogVideoX [3], MovieGen [ 2 ], PyramidFlow [ 5 ], Open-Sora Plan [ 4 ],
+HunyuanVideo [13 ]) employ VAEs that downscale the spatio-temporal dimensions by either 8 × 8 × 4
+3
+or 8 × 8 × 8, while increasing the number of channels from 3 to 16. These configurations result in a
+total compression factor of 1:48 or 1:96. Subsequently, a patchifier collects latent patches of size
+2 × 2 × 1 into tokens, achieving an effective pixels-to-tokens ratio of 1:1024 or 1:2048, at the input
+of the transformer.
+In contrast, our Video-VAE applies a spatio-temporal compression of 32 × 32 × 8 with 128 channels,
+resulting in a total compression of 1:192 (twice the typical compression) and a pixels-to-tokens ratio
+of 1:8192 (four times the typical ratio), without requiring a patchifier. See Table 1 for additional
+details.
+The challenge of information redundancy in pixel space at high resolutions has been highlighted by
+SimpleDiffusion [ 11 ], who mitigated it by increasing the amount of noise added at each diffusion
+step. This challenge also applies to higher-resolution latents (SD3 [12 ]), as well as to redundancy in
+the time dimension. Therefore, spatial and temporal compression is crucial.
+We analyze the redundancy in our latent space using PCA [ 14 ] over the latent pixels of 128 video
+samples (see Fig 3). As training progresses, our VAE learns to utilize the available channels and
+reduces their redundancy. Note that naive patchification of the latents before passing them to the
+transformer, as done by recent models, does not contribute to reducing the redundancy.0 20 40 60 80 100 120
+Component
+0.2
+0.4
+0.6
+0.8
+1.0
+Cumulative Explained Variance
+Latent Channels Cumulative Explained Variance
+2%
+4%
+8%
+16%
+25%
+50%
+70%
+100%
+(a) Latent channels cumulative explained variance at different training steps.
+(b) Correlation at 4%
+(c) Final Correlation
+Figure 3: Latent-space redundancy. (a) Cumulative explained-variance of latent channels at different
+training steps (2% - 100% of training). As training progresses, the redundancy reduces and compo-
+nents contribute more evenly to the variance. (b, c) Latent channels auto-correlation matrices: high
+off-diagonal values early (at 4% of total training steps) and near-zero at training completion.
+This pixels-to-latents compression is a critical process in our approach and the main enabler of its
+unprecedented speed.
+To facilitate the high-compression rate without loss of quality, we introduce several key enhancements
+over current VAEs, as described in the following sections. We trained and compared several VAEs
+designed to efficiently map both videos and images into a unified latent space. These VAEs represent
+a key component of our model. See Fig 4 for our VAE architecture. Notably, compared to standard
+DiT diffusion models, we move the patchifying layer from the beginning of the transformer to the
+beginning of the VAE encoder and task the VAE decoder with performing the last denoising step in
+conjunction with decoding the latents into pixels.
+4
+(a) Causal Encoder (b) Denoising Decoder
+Figure 4: The LTX-Video Video-VAE architecture: (a) Causal Encoder utilizing 3D Causal Convolu-
+tions, applying 32 × 32 × 8 compression (except the first frame, which is encoded as a separate latent
+frame). (b) Denoising Decoder with diffusion-timestep conditioning and multi-layer noise injection.
+2.1.1 Shared Diffusion Objective
+Rectified-flow models are designed to map noisy latents, zti = (1 − ti)z0 + tiϵ, to expected clean
+latents, z0, such that f θ (zti , ti) = z03. By initializing z0 as pure noise (ϵ) and iteratively updating z0,
+with decreasing noise levels, {tN , tN −1, tN −2, . . . , t2, t1}, the predicted z0 becomes progressively
+cleaner until it closely matches the distribution of the training set.
+In practice, however, the number of iterations is limited, and true convergence is rarely achieved.
+Consequently, residual uncertainty persists.
+In latent diffusion, where z0 = E(x0) is a compressed representation of the data sample x0, this
+residual uncertainty often manifests as out-of-distribution inputs to the decoder D, resulting in
+artifacts in the reconstructed pixel space, x0 = D(z0). Our experiments show that this effect is
+exacerbated when the encoder E operates at high compression rates, particularly in regions with
+high-frequency signals that are poorly represented in the compressed latent space.
+As operating within a compressed latent space is critical for the practical usability of video diffu-
+sion transformers, various strategies have been proposed to address these artifacts. For instance,
+MovieGen [ 2 ] introduced a diffusion-based upsampler operating in a less aggressively compressed
+latent space, while Sora [ 1] proposed an upsampler working directly in pixel space, conditioned on
+the latent outputs of the base model. While these approaches effectively mitigate artifacts, they incur
+significant computational and runtime costs.
+To generate precise fine details while retaining faster generation times, we propose a novel approach
+that fuses the decoding and denoising steps. Specifically, we train the decoder as a diffusion model that
+maps noisy latents to clean pixels at varying noise levels: x0 = D(zti , ti) = D ((1 − ti)z0 + tiϵ, ti).
+Since D maps between spaces of different dimensionality, it cannot be applied iteratively like a
+3In most implementations, the model f θ predicts an intermediate term from which z0 can be inferred in
+closed form.
+5
+standard diffusion model. However, it can execute the final denoising step, x0 = D(zt1 , t1), in a
+manner inaccessible to the base model. Unlike the latent-to-latent denoising base model, constrained
+by the limited expressiveness of the latent space, our denoising-decoder directly outputs in pixel
+space and is trained with pixel-space losses.
+Our implementation of D(zti , ti) follows a standard coarse-to-fine latent-to-pixel decoding architec-
+ture. To condition on the timestep ti, we employ adaptive normalization layers, as commonly used in
+U-Net-based diffusion models (e.g. DDPM [15]). The denoising-decoder is trained with noise levels
+in the range [0, 0.2] corresponding to the final diffusion timestep in common noise schedulers.
+2.1.2 Reconstruction GAN (rGAN)
+A common approach in VAE training is to balance pixel-wise L2 loss, perceptual loss (LPIPS [16 ]),
+and a GAN discriminator. At high compression rates, L2 loss often produces blurry outputs. The
+addition of perceptual loss reduces blurriness but can introduce texture artifacts, particularly in
+high-motion scenarios. However, the adversarial training approach typically relies on discriminators
+designed for tasks unrelated to reconstruction. These discriminators are tasked with distinguishing
+between real and fake samples without additional context, making their job unnecessarily challenging
+for reconstruction-specific tasks. This challenge is particularly pronounced for Patch-GAN discrimi-
+nators, which have a spatially limited context. For instance, it may be difficult for the discriminator to
+determine whether a blurry patch is due to depth-of-field effects or if it originates from a fake sample.
+(a) Traditional GAN (b) Reconstruction GAN
+Figure 5: Our novel Reconstruction GAN loss. (a) Traditional GAN – the discriminator sees either a
+real or a reconstructed image. (b) Reconstruction GAN – the discriminator sees both versions of the
+same sample (concatenated) and needs to decide which is the original and which is the reconstructed
+version.
+To address this, we propose Reconstruction GAN (see Fig 5), an adaptation of the traditional GAN
+training framework tailored to reconstruction tasks. In our approach, the discriminator is provided
+with both the input and the reconstructed samples for each iteration. Its goal is to determine which
+sample is the original (real) and which is reconstructed (fake). This relative comparison significantly
+simplifies the discriminator’s task and improves its ability to guide the generator.
+Our experiments demonstrate that our proposed Reconstruction GAN greatly enhances GAN stability
+and performance. Moreover, it allows the discriminator to serve not only as a loss for matching the
+general distribution of real samples but also as a robust reconstruction loss, effectively balancing
+fidelity and perceptual quality.
+2.1.3 Multi-layer Noise Injection
+In current VAEs (SD-XL [17 ], DC-VAE [6]), stochasticity is introduced only by adding noise to the
+latents (according to the predicted log-variance values). Following StyleGAN [ 18 ], we also inject
+noise at several layers of the VAE decoder allowing the generation of more diverse high-frequency
+details. The noise level is learned per-channel.
+2.1.4 Uniform log-variance
+We found that when using a wide latent space (large number of channels), standard KL loss tends to
+result in uneven latent space where some of the channels are not utilized for reconstruction but are
+6
+ 
+/
+21
+125%
+导读
+脑图
+LTX-Video: Realtime Video Latent Diffusion
+全文摘要
+本文介绍了一种名为LTX-Video的视频生成模型，该模型采用了基于注意力机制的Transformer结构，并结合了Video-VAE和去噪变换器的优点。与现有方法不同的是，LTX-Video旨在优化这些组件之间的交互，以提高效率和质量。其核心是一个经过精心设计的Video-VAE，可以实现高达1:192的压缩比，通过将分块操作从Transformer输入移动到VAE输入，实现了时空降采样为32x32x8像素/令牌的效果。这种高度压缩的潜在空间使得Transformer能够高效地执行全时空自注意，这对于生成高分辨率、具有时序一致性的视频至关重要。然而，高压缩率本身限制了对细节的表示。为了解决这个问题，我们的VAE解码器被赋予了将潜在变量转换为像素以及最终去噪步骤的任务，在像素空间中直接产生干净的结果。这种方法保留了生成精细细节的能力，而无需运行单独的上采样模块的成本。该模型支持多种用例，包括文本到视频和图像到视频生成，同时支持这两种能力的训练。它能够在Nvidia H100 GPU上以每秒2秒的速度生成768x512分辨率的24帧视频，优于所有类似规模的现有模型。源代码和预训练模型已公开发布，为可访问性和可扩展性视频生成设定了新的基准。
+论文速读
+论文方法
+方法描述
+该论文提出了一种名为LTX-Video的方法，用于实现高质量、高效率的文本到视频扩散变换。该方法采用了以下关键设计：
+1.	使用了高维度压缩的潜变量空间，提高了模型的速度，并减少了冗余信息。
+2.	引入了一个称为Reconstruction GAN的自适应损失函数，用于平衡重建质量和图像质量。
+3.	在解码器中引入了多层噪声注入，以增加模型的多样性。
+4.	使用了视频DWT损失函数来提高高频细节的重建效果。
+5.	对于视频数据，使用了RoPE（Rotary Positional Embedding）作为位置编码方式，以更好地处理不同长度和维度的数据。
+6.	通过调整预训练文本编码器和条件化方法，使得模型能够更准确地理解并生成基于文本的内容。
+方法改进
+与传统的文本到视频扩散变换模型相比，LTX-Video方法的主要改进包括：
+1.	采用了更高维度的潜变量空间，从而在保持较高视觉质量的同时，大大提高了模型的速度。
+2.	引入了Reconstruction GAN自适应损失函数，使模型能够在重建质量和图像质量之间取得更好的平衡。
+3.	在解码器中引入了多层噪声注入，增加了模型的多样性，提高了生成视频的质量。
+4.	使用了视频DWT损失函数来提高高频细节的重建效果。
+5.	对于视频数据，使用了RoPE（Rotary Positional Embedding）作为位置编码方式，可以更好地处理不同长度和维度的数据。
+6.	调整了预训练文本编码器和条件化方法，使模型能够更准确地理解并生成基于文本的内容。
+解决的问题
+LTX-Video方法解决了传统文本到视频扩散变换模型存在的问题，主要包括：
+1.	模型速度慢：通过采用更高维度的潜变量空间和优化解码器结构，LTX-Video显著提高了模型的速度。
+2.	重建质量不高：通过引入Reconstruction GAN自适应损失函数和视频DWT损失函数，LTX-Video能够更好地平衡重建质量和图像质量，提高生成视频的质量。
+3.	多样性不足：通过在解码器中引入多层噪声注入，LTX-Video增加了模型的多样性，提高了生成视频的质量。
+4.	不适用于长序列数据：通过使用RoPE（Rotary Positional Embedding）作为位置编码方式，LTX-Video可以更好地处理不同长度和维度的数据，使其适用于长序列数据。
+5.	文本条件化不准确：通过调整预训练文本编码器和条件化方法，LTX-Video使模型能够更准确地理解并生成基于文本的内容。
+ 
+论文实验
+本文进行了四个实验来验证LTX-Video模型的性能和效果：
+4.1 训练实验：使用ADAM-W优化器对模型进行训练，并在数据子集中进行微调以提高质量。
+4.2 评估实验：通过人类调查比较了LTX-Video与Open-Sora Plan、CogVideoX和PyramidFlow等当前最先进的相似大小模型的质量。生成了5秒长的视频，并使用相同的提示和初始帧进行了测试。参与者根据视觉质量、运动真实度和提示遵循程度对每组视频进行排名。结果显示，LTX-Video在所有类别中都显著优于其他类似大小的模型，甚至具有明显的速度优势。
+4.3 Ablation实验：本节包括三个子实验，分别是Reconstruction GAN vs. traditional GAN、RoPE频率间距以及Denoising VAE解码器实验。
+4.3.1 Reconstruction GAN vs. traditional GAN：在这个实验中，我们比较了传统GAN损失和重建GAN损失的效果。结果表明，我们的重建GAN损失可以显著减少可见的伪影。
+4.3.2 RoPE频率间距：我们比较了指数和反比例指数两种频率间距选项的效果。结果表明，反比例指数间距的训练损失更高。
+4.3.3 Denoising VAE解码器实验：这个实验是为了验证VAE解码器的任务是执行最后一步去噪操作并将其转换为像素。我们将VAE解码器条件化于时间步t=0.05和t=0.0，分别进行了两次调查。结果表明，根据我们的方法生成的视频比标准结果更受用户欢迎，特别是在高运动的视频中，由于强压缩而产生的伪影得到了缓解。
+总的来说，这些实验验证了LTX-Video模型的有效性和优越性。
+论文总结
+文章优点
+该论文提出了一种名为LTX-Video的新型文本到视频生成模型，其主要优点包括：
+1.	高效性能：LTX-Video能够在实时速度内生成高质量的视频，并且不需要使用大量的计算资源。
+2.	优秀的质量：LTX-Video在与现有技术相比的情况下，能够产生更高质量的视频，具有更好的运动连贯性和更强的输入提示或条件帧的一致性。
+3.	可扩展性：LTX-Video是一种基于注意力机制的深度学习模型，可以应用于各种不同类型的视觉任务，例如多视图合成或多细粒度编辑等。
+方法创新点
+该论文的主要创新点在于：
+1.	整合了视频变分自编码器（VAE）和denoising transformer：LTX-Video将VAE和denoising transformer无缝集成在一起，实现了高效的处理方式。
+2.	引入共享扩散目标：LTX-Video通过在VAE解码器和transformer之间引入共享扩散目标，有效地融合了最终的扩散步和潜在空间到像素解码阶段，从而实现细节生成而无需额外的上采样模块。
+未来展望
+尽管LTX-Video已经取得了显著的进展，但还有许多未来的方向值得探索，例如：
+1.	支持更长的视频：目前，LTX-Video仅支持生成长度不超过十秒的短视频。因此，未来的研究可能会探讨如何扩展其架构以支持更长时间的视频。
+2.	改进时空一致性技术：虽然LTX-Video已经在保持时间连贯性方面表现出色，但未来的研究还可以进一步改进这些技术，以提高生成视频的质量。
+3.	适应特定领域的任务：目前，LTX-Video还没有经过广泛的测试来评估其在特定领域任务中的表现。因此，未来的研究可能需要针对多视图合成或细粒度运动编辑等特定任务进行实验，以了解其性能和适用性。
+发展历程：文本到视频模型的进步
+存在问题：现有方法的局限性
+1.1 研究背景
+建立了一个高效、快速的视频生成模型
+实现了文本到视频和图像到视频的转换
+公开源代码和预训练模型，提高可访问性和实用性
+1.2 主要贡献
+1. 引言
+2.1.1 设计原则
+2.1.2 关键改进
+2.1.3 执行细节
+2.1 视频VAE
+2.2.1 增强功能
+2.2.2 结构设计
+2.2 视频变压器
+2.3.1 文本条件
+2.3.2 图像条件
+2.3 条件
+2.4.1 整体框架
+2.4.2 特殊技巧
+2.4 训练策略
+2. 方法
+LTX-Video 文档脑图摘要
