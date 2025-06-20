@@ -1,21 +1,21 @@
-import copy
-import inspect
-import math
-import re
+import argparse
+import os
+import random
 import logging
-from contextlib import nullcontext
-from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from datetime import datetime
+from pathlib import Path
+
+from typing import Optional, List, Union
+import yaml
+
+import imageio
+import json
+import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from diffusers.image_processor import VaeImageProcessor
-from diffusers.models import AutoencoderKL
-from diffusers.pipelines.pipeline_utils import DiffusionPipeline, ImagePipelineOutput
-from diffusers.schedulers import DPMSolverMultistepScheduler
-from diffusers.utils import deprecate
-from diffusers.utils.torch_utils import randn_tensor
-from einops import rearrange
+import cv2
+from safetensors import safe_open
+from transformers import BitsAndBytesConfig
+from PIL import Image
 from transformers import (
     T5EncoderModel,
     T5Tokenizer,
@@ -23,1646 +23,851 @@ from transformers import (
     AutoProcessor,
     AutoTokenizer,
 )
+from huggingface_hub import hf_hub_download
 
 from ltx_video.models.autoencoders.causal_video_autoencoder import (
     CausalVideoAutoencoder,
 )
-from ltx_video.models.autoencoders.vae_encode import (
-    get_vae_size_scale_factor,
-    latent_to_pixel_coords,
-    vae_decode,
-    vae_encode,
-)
-from ltx_video.models.transformers.symmetric_patchifier import Patchifier
+from ltx_video.models.transformers.symmetric_patchifier import SymmetricPatchifier
 from ltx_video.models.transformers.transformer3d import Transformer3DModel
-from ltx_video.schedulers.rf import TimestepShifter
-from ltx_video.utils.skip_layer_strategy import SkipLayerStrategy
-from ltx_video.utils.prompt_enhance_utils import generate_cinematic_prompt
-from ltx_video.models.autoencoders.latent_upsampler import LatentUpsampler
-from ltx_video.models.autoencoders.vae_encode import (
-    un_normalize_latents,
-    normalize_latents,
+from ltx_video.pipelines.pipeline_ltx_video import (
+    ConditioningItem,
+    LTXVideoPipeline,
+    LTXMultiScalePipeline,
 )
+from ltx_video.schedulers.rf import RectifiedFlowScheduler
+from ltx_video.utils.skip_layer_strategy import SkipLayerStrategy
+from ltx_video.models.autoencoders.latent_upsampler import LatentUpsampler
+import ltx_video.pipelines.crf_compressor as crf_compressor
 
-try:
-    import torch_xla.distributed.spmd as xs
-except ImportError:
-    xs = None
+MAX_HEIGHT = 720
+MAX_WIDTH = 1280
+MAX_NUM_FRAMES = 257
 
-logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
+logger = logging.getLogger("LTX-Video")
 
-#定义宽度与高度比例左边比例对应右边宽度和高度，指定宽高比后从列表只自动选择最接近的标准分辨率
-ASPECT_RATIO_1024_BIN = {
-    "0.25": [512.0, 2048.0],
-    "0.28": [512.0, 1856.0],
-    "0.32": [576.0, 1792.0],
-    "0.33": [576.0, 1728.0],
-    "0.35": [576.0, 1664.0],
-    "0.4": [640.0, 1600.0],
-    "0.42": [640.0, 1536.0],
-    "0.48": [704.0, 1472.0],
-    "0.5": [704.0, 1408.0],
-    "0.52": [704.0, 1344.0],
-    "0.57": [768.0, 1344.0],
-    "0.6": [768.0, 1280.0],
-    "0.68": [832.0, 1216.0],
-    "0.72": [832.0, 1152.0],
-    "0.78": [896.0, 1152.0],
-    "0.82": [896.0, 1088.0],
-    "0.88": [960.0, 1088.0],
-    "0.94": [960.0, 1024.0],
-    "1.0": [1024.0, 1024.0],
-    "1.07": [1024.0, 960.0],
-    "1.13": [1088.0, 960.0],
-    "1.21": [1088.0, 896.0],
-    "1.29": [1152.0, 896.0],
-    "1.38": [1152.0, 832.0],
-    "1.46": [1216.0, 832.0],
-    "1.67": [1280.0, 768.0],
-    "1.75": [1344.0, 768.0],
-    "2.0": [1408.0, 704.0],
-    "2.09": [1472.0, 704.0],
-    "2.4": [1536.0, 640.0],
-    "2.5": [1600.0, 640.0],
-    "3.0": [1728.0, 576.0],
-    "4.0": [2048.0, 512.0],
-}
+def get_total_gpu_memory():
+    if torch.cuda.is_available():
+        total_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)    # 计算设备总显存有多少
+        logger.debug(f"✅设备总显存: {total_memory}") 
+        return total_memory
+    return 0
 
-ASPECT_RATIO_512_BIN = {
-    "0.25": [256.0, 1024.0],
-    "0.28": [256.0, 928.0],
-    "0.32": [288.0, 896.0],
-    "0.33": [288.0, 864.0],
-    "0.35": [288.0, 832.0],
-    "0.4": [320.0, 800.0],
-    "0.42": [320.0, 768.0],
-    "0.48": [352.0, 736.0],
-    "0.5": [352.0, 704.0],
-    "0.52": [352.0, 672.0],
-    "0.57": [384.0, 672.0],
-    "0.6": [384.0, 640.0],
-    "0.68": [416.0, 608.0],
-    "0.72": [416.0, 576.0],
-    "0.78": [448.0, 576.0],
-    "0.82": [448.0, 544.0],
-    "0.88": [480.0, 544.0],
-    "0.94": [480.0, 512.0],
-    "1.0": [512.0, 512.0],
-    "1.07": [512.0, 480.0],
-    "1.13": [544.0, 480.0],
-    "1.21": [544.0, 448.0],
-    "1.29": [576.0, 448.0],
-    "1.38": [576.0, 416.0],
-    "1.46": [608.0, 416.0],
-    "1.67": [640.0, 384.0],
-    "1.75": [672.0, 384.0],
-    "2.0": [704.0, 352.0],
-    "2.09": [736.0, 352.0],
-    "2.4": [768.0, 320.0],
-    "2.5": [800.0, 320.0],
-    "3.0": [864.0, 288.0],
-    "4.0": [1024.0, 256.0],
-}
+def get_device():
+    if torch.cuda.is_available():                           # 如果"cuda"可以获得
+        return "cuda"                         # 返回英伟达设备
+    elif torch.backends.mps.is_available():                 # 如果torch后端计划可发获得，返回计划，则当前 PyTorch 版本支持使用 NVIDIA MPS 来加速训练。
+        return "mps"                          # 返回苹果设备
+    return "cpu"
 
-# 检索时间步骤
-def retrieve_timesteps(
-    scheduler,
-    num_inference_steps: Optional[int] = None,
-    device: Optional[Union[str, torch.device]] = None,
-    timesteps: Optional[List[int]] = None,
-    skip_initial_inference_steps: int = 0,
-    skip_final_inference_steps: int = 0,
-    **kwargs,
-):
-    # 如果时间步长是没有
-    if timesteps is not None:
-        accepts_timesteps = "timesteps" in set(
-            inspect.signature(scheduler.set_timesteps).parameters.keys()
-        )
-        if not accepts_timesteps:
-            raise ValueError(
-                f"The current scheduler class {scheduler.__class__}'s `set_timesteps` does not support custom"
-                f" timestep schedules. Please check whether you are using the correct scheduler."
-            )
-        scheduler.set_timesteps(timesteps=timesteps, device=device, **kwargs)
-        timesteps = scheduler.timesteps
-        num_inference_steps = len(timesteps)
+def load_image_to_tensor_with_resize_and_crop(
+    image_input: Union[str, Image.Image],
+    target_height: int = 512,
+    target_width: int = 768,
+    just_crop: bool = False,
+    device: str = "cpu", 
+) -> torch.Tensor:
+    if isinstance(image_input, str):
+        image = Image.open(image_input).convert("RGB")
+    elif isinstance(image_input, Image.Image):
+        image = image_input
     else:
-        scheduler.set_timesteps(num_inference_steps, device=device, **kwargs)
-        timesteps = scheduler.timesteps
+        raise ValueError("image_input must be either a file path or a PIL Image object")
+        logger.debug(f"✅图像文件存在: {image}")
 
-        if (
-            skip_initial_inference_steps < 0
-            or skip_final_inference_steps < 0
-            or skip_initial_inference_steps + skip_final_inference_steps
-            >= num_inference_steps
-        ):
-            raise ValueError(
-                "invalid skip inference step values: must be non-negative and the sum of skip_initial_inference_steps and skip_final_inference_steps must be less than the number of inference steps"
-            )
+    input_width, input_height = image.size                     # 获取原始图像的宽度和高度
+    aspect_ratio_target = target_width / target_height         # 计算生成图像的宽高比（目标宽度除以目标高度）
+    aspect_ratio_frame = input_width / input_height            # 计算原始图像尺寸的宽高比（原始宽度除以原始高度）
+    logger.debug(f"✅原始图像宽高比: {aspect_ratio_frame:.4f} (≈{input_width}:{input_height})")
+    logger.debug(f"✅目标宽高比: {aspect_ratio_target:.4f} (≈{target_width}:{target_height})")
+    if aspect_ratio_frame > aspect_ratio_target:               # 原始图像比目标更宽（横图）
+        new_width = int(input_height * aspect_ratio_target)    # 裁剪后的尺寸
+        new_height = input_height
+        x_start = (input_width - new_width) // 2               # 裁剪区域的起始坐标：//2水平居中
+        y_start = 0
+    else:                                                       # 原始图像比目标更高（竖图）
+        new_width = input_width
+        new_height = int(input_width / aspect_ratio_target)     # 裁剪后的尺寸
+        x_start = 0
+        y_start = (input_height - new_height) // 2              # 垂直居中
 
-        timesteps = timesteps[
-            skip_initial_inference_steps : len(timesteps) - skip_final_inference_steps
-        ]
-        scheduler.set_timesteps(timesteps=timesteps, device=device, **kwargs)
-        num_inference_steps = len(timesteps)
+    image = image.crop((x_start, y_start, x_start + new_width, y_start + new_height))
+    if not just_crop:
+        image = image.resize((target_width, target_height))
+        logger.debug(f"✅最终图像尺寸: {image}")
 
-    return timesteps, num_inference_steps
+    image = np.array(image)
+    image = cv2.GaussianBlur(image, (3, 3), 0)
+    frame_tensor = torch.from_numpy(image).float()
+    frame_tensor = frame_tensor.to(device)
+    logger.debug(f"✅frame_tensor(from_numpy) device: {frame_tensor.device}")
 
-@dataclass
-# 类调节项
-class ConditioningItem:
+    frame_tensor = crf_compressor.compress(frame_tensor / 255.0) * 255.0
+    logger.debug(f"✅frame_tensor(after compress) device: {frame_tensor.device}")
 
-    # torch.Tensor 是一种包含单一数据类型元素的多维矩阵
-    media_item: torch.Tensor
-    media_frame_number: int
-    conditioning_strength: float
-    media_x: Optional[int] = None
-    media_y: Optional[int] = None
+    frame_tensor = frame_tensor.permute(2, 0, 1)
+    logger.debug(f"✅frame_tensor(after permute) device: {frame_tensor.device}")
 
-# 视频生成管道
-class LTXVideoPipeline(DiffusionPipeline):
-    # 再编译
-    bad_punct_regex = re.compile(
-        r"["
-        + "#®•©™&@·º½¾¿¡§~"
-        + r"\)"
-        + r"\("
-        + r"\]"
-        + r"\["
-        + r"\}"
-        + r"\{"
-        + r"\|"
-        + "\\"
-        + r"\/"
-        + r"\*"
-        + r"]{1,}"
-    )  # noqa
+    frame_tensor = (frame_tensor / 127.5) - 1.0
+    logger.debug(f"✅frame_tensor(after normalize) device: {frame_tensor.device}")
 
-    # 可选组件
-    _optional_components = [
-        "tokenizer",
-        "text_encoder",
-        "prompt_enhancer_image_caption_model",
-        "prompt_enhancer_image_caption_processor",
-        "prompt_enhancer_llm_model",
-        "prompt_enhancer_llm_tokenizer",
-    ]
-    # 模型卸载顺序
-    model_cpu_offload_seq = "prompt_enhancer_image_caption_model->prompt_enhancer_llm_model->text_encoder->transformer->vae"
+    result_tensor = frame_tensor.unsqueeze(0).unsqueeze(2)
+    logger.debug(f"✅frame_tensor(final 5D) device: {result_tensor.device}")
+    return result_tensor
 
-    def __init__(
-        self,
-        tokenizer: T5Tokenizer,                                  # t5模型分词器
-        text_encoder: T5EncoderModel,                            # t5模型文本编码
-        vae: AutoencoderKL,                                      # 主模型权重自带
-        transformer: Transformer3DModel,                         # 主模型权重文件
-        scheduler: DPMSolverMultistepScheduler,                  # 多步骤调度器，用于采样
-        patchifier: Patchifier,
-        prompt_enhancer_image_caption_model: AutoModelForCausalLM,   # 图像增强编码
-        prompt_enhancer_image_caption_processor: AutoProcessor,      # 图像增强标题处理器
-        prompt_enhancer_llm_model: AutoModelForCausalLM,             # 提示词增强模型
-        prompt_enhancer_llm_tokenizer: AutoTokenizer,                # 提示词增强分词器
-        allowed_inference_steps: Optional[List[float]] = None,
-    ):
-        super().__init__()
+def calculate_padding(
+    source_height: int, source_width: int, target_height: int, target_width: int
+) -> tuple[int, int, int, int]:
 
-        self.register_modules(
-            tokenizer=tokenizer,
-            text_encoder=text_encoder,
-            vae=vae,
-            transformer=transformer,
-            scheduler=scheduler,
-            patchifier=patchifier,
-            prompt_enhancer_image_caption_model=prompt_enhancer_image_caption_model,
-            prompt_enhancer_image_caption_processor=prompt_enhancer_image_caption_processor,
-            prompt_enhancer_llm_model=prompt_enhancer_llm_model,
-            prompt_enhancer_llm_tokenizer=prompt_enhancer_llm_tokenizer,
-        )
+    pad_height = target_height - source_height
+    pad_width = target_width - source_width
 
-        self.video_scale_factor, self.vae_scale_factor, _ = get_vae_size_scale_factor(
-            self.vae
-        )
-        self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
+    pad_top = pad_height // 2
+    pad_bottom = pad_height - pad_top  # Handles odd padding
+    pad_left = pad_width // 2
+    pad_right = pad_width - pad_left  # Handles odd padding
 
-        self.allowed_inference_steps = allowed_inference_steps
+    padding = (pad_left, pad_right, pad_top, pad_bottom)
+    logger.debug(f"✅图像填充的完整数据: {padding}")
+    return padding
 
-    def mask_text_embeddings(self, emb, mask):
-        if emb.shape[0] == 1:
-            keep_index = mask.sum().item()
-            return emb[:, :, :keep_index, :], keep_index
+def convert_prompt_to_filename(text: str, max_len: int = 20) -> str:
+    # 删除非字母并转换为小写
+    clean_text = "".join(
+        char.lower() for char in text if char.isalpha() or char.isspace()
+    )
+
+    words = clean_text.split()
+
+    result = []
+    current_length = 0
+
+    for word in words:
+        new_length = current_length + len(word)
+
+        if new_length <= max_len:
+            result.append(word)
+            current_length += len(word)
         else:
-            masked_feature = emb * mask[:, None, :, None]
-            return masked_feature, emb.shape[2]
+            break
 
-    # 文本编码提示词
-    def encode_prompt(
-        self,
-        prompt: Union[str, List[str]],                                              # 提示词
-        do_classifier_free_guidance: bool = True,                                   # 是否使用隐式分类器(classifier_free)引导
-        negative_prompt: str = "",                                                  # 负面提示词
-        num_images_per_prompt: int = 1,                                             # 每一个提示生成图像数
-        device: Optional[torch.device] = None,
-        prompt_embeds: Optional[torch.FloatTensor] = None,                          # 提示词嵌入
-        negative_prompt_embeds: Optional[torch.FloatTensor] = None,                 # 负面提示词嵌入
-        prompt_attention_mask: Optional[torch.FloatTensor] = None,                  # 提示注意掩码
-        negative_prompt_attention_mask: Optional[torch.FloatTensor] = None,         # 负面提示注意掩码
-        text_encoder_max_tokens: int = 256,                                         # 文本编码最大令牌
-        **kwargs,
-    ):
-        # 警告信息mask_feature已被弃用，也不影响计算，在1.0.0版本后删除
-        if "mask_feature" in kwargs:
-            deprecation_message = "The use of `mask_feature` is deprecated. It is no longer used in any computation and that doesn't affect the end results. It will be removed in a future version."
-            deprecate("mask_feature", "1.0.0", deprecation_message, standard_warn=False)
+    return "-".join(result)
 
-        if device is None:                                                  # 如果设备没有指定
-            device = self._execution_device                                 # 将使用self._execution_device指定的设备
-            logger.debug(f"✅管道执行设备: {device}")
+# 生成输出视频名称
+def get_unique_filename(
+    base: str,
+    ext: str,
+    prompt: str,
+    seed: int,
+    resolution: tuple[int, int, int],
+    dir: Path,
+    endswith=None,
+    index_range=1000,
+) -> Path:
+    base_filename = f"{base}_{convert_prompt_to_filename(prompt, max_len=30)}_{seed}_{resolution[0]}x{resolution[1]}x{resolution[2]}"
+    for i in range(index_range):
+        filename = dir / f"{base_filename}_{i}{endswith if endswith else ''}{ext}"
+        if not os.path.exists(filename):
+            return filename
+    raise FileExistsError(
+        f"Could not find a unique filename after {index_range} attempts."
+    )
 
-        if prompt is not None and isinstance(prompt, str):                  # 如果提示词没有和is实例（提示词, 字符串）
-            batch_size = 1
-        elif prompt is not None and isinstance(prompt, list):                # 如果没有提示词和实例（提示词, 列表）
-            batch_size = len(prompt)
+def seed_everething(seed: int):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+    if torch.backends.mps.is_available():
+        torch.mps.manual_seed(seed)
+
+def main():
+    # 创建解析器定义需要的参数自动生成帮助和使用信息使用 add_argument() 方法向解析器中添加参数
+    parser = argparse.ArgumentParser(
+        description="Load models from separate directories and run the pipeline."
+    )
+
+    parser.add_argument(
+        "--output_path",
+        type=str,
+        default=None,
+        help="保存输出视频的文件夹路径, 如果 None 将保存在 outputs/ 目录中.",
+    )
+    parser.add_argument("--seed", type=int, default="171198")
+
+    parser.add_argument(
+        "--num_images_per_prompt",
+        type=int,
+        default=1,
+        help="每个提示生成的图像数量",
+    )
+    parser.add_argument(
+        "--image_cond_noise_scale",
+        type=float,
+        default=0.15,
+        help="添加到条件图像上的噪声量",
+    )
+    parser.add_argument(
+        "--height",
+        type=int,
+        default=704,
+        help="输出视频帧的高度（如果提供了输入图像，则为可选参数）.",
+    )
+    parser.add_argument(
+        "--width",
+        type=int,
+        default=1216,
+        help="输出视频帧的宽度 （如果没有将从图像中推断）.",
+    )
+    parser.add_argument(
+        "--num_frames",
+        type=int,
+        default=121,
+        help="要生成的视频帧数",
+    )
+    parser.add_argument(
+        "--frame_rate", type=int, default=30, help="输出视频的帧率"
+    )
+    parser.add_argument(
+        "--device",
+        default=None,
+        help="运行推理的设备. 如果没有指定, 将自动检测使用 CUDA 或 MPS （如果可用）, 否则使用 CPU.",
+    )
+    parser.add_argument(
+        "--pipeline_config",
+        type=str,
+        default="configs/ltxv-2b-0.9.5.yaml",
+        help="pipeline配置文件的路径, 其中包含pipeline的参数",
+    )
+    parser.add_argument(
+        "--prompt",
+        type=str,
+        help="用于指导生成的文本提示词",
+    )
+    parser.add_argument(
+        "--negative_prompt",
+        type=str,
+        default="worst quality, inconsistent motion, blurry, jittery, distorted",
+        help="对不需要的功能进行否定提示（负面提示词）",
+    )
+    parser.add_argument(
+        "--offload_to_cpu",
+        action="store_true",
+        help="将不必要的计算卸载到 CPU.",
+    )
+    parser.add_argument(
+        "--input_media_path",
+        type=str,
+        default=None,
+        help="要使用视频到视频pipeline修改的输入视频（或图像）的路径",
+    )
+    parser.add_argument(
+        "--conditioning_media_paths",
+        type=str,
+        nargs="*",
+        help="调节媒体 (图像或视频)的路径列表. 每条路径将用作调节项.",
+    )
+    parser.add_argument(
+        "--conditioning_strengths",
+        type=float,
+        nargs="*",
+        help="每个调节项调节强度列表 (介于 0 和 1 之间) 必须与调节项的数量匹配.",
+    )
+    parser.add_argument(
+        "--conditioning_start_frames",
+        type=int,
+        nargs="*",
+        help="应用每个调节项的帧索引列表.必须与调节项的数量匹配.",
+    )
+
+    args = parser.parse_args()
+    logger.warning(f"Running generation with arguments: {args}")
+    infer(**vars(args))
+
+def get_supported_precision():
+    # 判断设备是否支持 bfloat16，否则用 float16
+    if torch.cuda.is_available():
+        major, _ = torch.cuda.get_device_capability()
+        if major >= 8:
+            return torch.bfloat16
         else:
-            batch_size = prompt_embeds.shape[0]
-            logger.debug(f"✅提示词: {batch_size}") 
+            return torch.float16
+    else:
+        return torch.float32
 
-        # 文本序列的最大长度
-        max_length = (
-            text_encoder_max_tokens  # TPU 仅支持 128的倍数长度
-        )
-        if prompt_embeds is None:                                               # 如果没有提示词嵌入
-            assert (
-                self.text_encoder is not None
-            ), "You should provide either prompt_embeds or self.text_encoder should not be None,"
-            text_enc_device = next(self.text_encoder.parameters()).device
-            prompt = self._text_preprocessing(prompt)                            # 提示词文本预处理
-            text_inputs = self.tokenizer(
-                prompt,
-                padding="max_length",                                            # 填充为最大序列长度
-                max_length=max_length,
-                truncation=True,                                                 # 截断为真
-                add_special_tokens=True,
-                return_tensors="pt",
-            )
-            text_input_ids = text_inputs.input_ids
-            untruncated_ids = self.tokenizer(
-                prompt, padding="longest", return_tensors="pt"
-            ).input_ids
+# 定义视频生成的管道
+def create_ltx_video_pipeline(
+    ckpt_path: str,                         # 权重路径
+    precision: str,                         # 精度
+    text_encoder_model_name_or_path: str,   # 文本编码器路径
+    sampler: Optional[str] = None,          # 采样、自选（没有）
+    device: Optional[str] = None,           # 设备、自选（没有）
+    enhance_prompt: bool = False,
+    prompt_enhancer_image_caption_model_name_or_path: Optional[str] = None,          # 提示图像增强模型路径
+    prompt_enhancer_llm_model_name_or_path: Optional[str] = None,                    # 提示词增强模型路径
+) -> LTXVideoPipeline:
+    ckpt_path = Path(ckpt_path)
+    assert os.path.exists(
+        ckpt_path
+    ), f"Ckpt path provided (--ckpt_path) {ckpt_path} does not exist"
 
-            if untruncated_ids.shape[-1] >= text_input_ids.shape[
-                -1
-            ] and not torch.equal(text_input_ids, untruncated_ids):
-                removed_text = self.tokenizer.batch_decode(
-                    untruncated_ids[:, max_length - 1 : -1]
-                )
+    with safe_open(ckpt_path, framework="pt") as f:
+        metadata = f.metadata()
+        config_str = metadata.get("config")
+        configs = json.loads(config_str)
+        allowed_inference_steps = configs.get("allowed_inference_steps", None)
 
-                logger.debug(
-                    "The following part of your input was truncated because CLIP can only handle sequences up to"
-                    f" {max_length} tokens: {removed_text}"
-                )
-                logger.debug(f"✅以下部份内容初截断因为CLIP模型最多只能处理: {max_length}个词: {removed_text}")
+    # ====== 修改: 分片加载与低显存适配 ======
+    # 自动选择 dtype
+    dtype = get_supported_precision()
+    # 自动判断是否8G卡，采用分片/CPU+GPU混合
+    total_gpu_mem = get_total_gpu_memory()
+    is_low_mem_gpu = (total_gpu_mem > 0 and total_gpu_mem <= 8)
 
-            prompt_attention_mask = text_inputs.attention_mask
-            prompt_attention_mask = prompt_attention_mask.to(text_enc_device)
-            prompt_attention_mask = prompt_attention_mask.to(device)
+    # 使用device_map和low_cpu_mem_usage参数进行分片加载
+    load_kwargs = {
+        "torch_dtype": dtype,
+        "low_cpu_mem_usage": True,
+    }
+    if is_low_mem_gpu:
+        # 8G卡采用分片加载
+        load_kwargs["device_map"] = "auto"
+    else:
+        # 大卡直接全加载到GPU
+        load_kwargs["device_map"] = {"": device or get_device()}
 
-            prompt_embeds = self.text_encoder(
-                text_input_ids.to(text_enc_device), attention_mask=prompt_attention_mask
-            )
-            prompt_embeds = prompt_embeds[0]
-            logger.debug(f"✅prompt_embeds 运行在: {prompt_embeds.device}")
+    # ===== 关键: from_pretrained 传递分片参数 =====
+    try:
+        vae = CausalVideoAutoencoder.from_pretrained(str(ckpt_path), **load_kwargs)                 # 加载自动编码器
+        logger.debug(f"✅VAE模型加载成功")
+    except Exception as e:
+        logger.error(f"❌VAE模型加载失败：{ckpt_path}, error: {e}")
+    try:
+        transformer = Transformer3DModel.from_pretrained(str(ckpt_path), **load_kwargs)             # 加载注意力机制模型transformer（含编码器与解码器）
+        logger.debug(f"✅Transformer模型加载成功")
+    except Exception as e:
+        logger.error(f"❌Transformer模型加载失败：{ckpt_path}, error: {e}")
 
-        if self.text_encoder is not None:
-            dtype = self.text_encoder.dtype
-        elif self.transformer is not None:
-            dtype = self.transformer.dtype
-        else:
-            dtype = None
-
-        # 将提示嵌入转移到设备
-        prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
-        logger.debug(f"✅prompt_embeds 转移后运行在: {prompt_embeds.device}")
-
-        # 获取原始嵌入张量的形状信息：原始大小,序列长度,嵌入维度
-        bs_embed, seq_len, _ = prompt_embeds.shape
-        # 复制文本嵌入：为每个提示生成多个图像,使用repeat方法沿第二个维度复制张量(0维不变、1维序列维度、2维嵌入维度不变)
-        prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
-        # 重塑张量维度以匹配批量处理要求
-        prompt_embeds = prompt_embeds.view(
-            bs_embed * num_images_per_prompt, seq_len, -1
-        )
-        # 同样复制注意力掩码
-        prompt_attention_mask = prompt_attention_mask.repeat(1, num_images_per_prompt)
-        # 重塑注意力掩码维度
-        prompt_attention_mask = prompt_attention_mask.view(
-            bs_embed * num_images_per_prompt, -1
+    # 如果指定了采样器则使用checkpoint，否则从本地加载采样器
+    if sampler == "from_checkpoint" or not sampler:                                            
+        scheduler = RectifiedFlowScheduler.from_pretrained(str(ckpt_path))
+        logger.debug(f"✅主模型采样器Scheduler加载成功: {ckpt_path}")
+    else:
+        scheduler = RectifiedFlowScheduler(
+            sampler=("Uniform" if sampler.lower() == "uniform" else "LinearQuadratic")
         )
 
-        # 获取无条件嵌入以进行无分类器指导
-        if do_classifier_free_guidance and negative_prompt_embeds is None:
-            uncond_tokens = self._text_preprocessing(negative_prompt)
-            uncond_tokens = uncond_tokens * batch_size
-            max_length = prompt_embeds.shape[1]
-            uncond_input = self.tokenizer(
-                uncond_tokens,
-                padding="max_length",
-                max_length=max_length,
-                truncation=True,
-                return_attention_mask=True,
-                add_special_tokens=True,
-                return_tensors="pt",
+    # 文本编碼器从T5模型加载
+    text_encoder = T5EncoderModel.from_pretrained(text_encoder_model_name_or_path, subfolder="text_encoder")
+    logger.debug(f"✅文本编码模型加载成功: {text_encoder_model_name_or_path}, ")
+
+    patchifier = SymmetricPatchifier(patch_size=1)      # 修补器
+
+    tokenizer = T5Tokenizer.from_pretrained(text_encoder_model_name_or_path, subfolder="tokenizer")
+    logger.debug(f"✅分词器加载成功: {text_encoder_model_name_or_path}")
+
+    transformer = transformer.to(device)      # 将注意力机制模型transformer转移到设备上
+
+    vae = vae.to(device)                      # 将自动编码器转移到设备上
+
+    text_encoder = text_encoder.to(device)    # 将文本编码器转移到设备上
+
+    if enhance_prompt:
+        try:
+            prompt_enhancer_image_caption_model = AutoModelForCausalLM.from_pretrained( 
+                prompt_enhancer_image_caption_model_name_or_path, trust_remote_code=True
             )
-            negative_prompt_attention_mask = uncond_input.attention_mask
-            negative_prompt_attention_mask = negative_prompt_attention_mask.to(
-                text_enc_device
-            )
-
-            negative_prompt_embeds = self.text_encoder(
-                uncond_input.input_ids.to(text_enc_device),
-                attention_mask=negative_prompt_attention_mask,
-            )
-            negative_prompt_embeds = negative_prompt_embeds[0]
-            logger.debug(f"✅negative_prompt_embeds 运行在: {negative_prompt_embeds.device}")
-
-        if do_classifier_free_guidance:
-            # 使用MPS友好方法为每个提示符的每一代重复无条件嵌入
-            seq_len = negative_prompt_embeds.shape[1]
-
-            negative_prompt_embeds = negative_prompt_embeds.to(
-                dtype=dtype, device=device
-            )
-            logger.debug(f"✅negative_prompt_embeds 转移后运行在: {negative_prompt_embeds.device}")
-
-            negative_prompt_embeds = negative_prompt_embeds.repeat(
-                1, num_images_per_prompt, 1
-            )
-            negative_prompt_embeds = negative_prompt_embeds.view(
-                batch_size * num_images_per_prompt, seq_len, -1
-            )
-
-            negative_prompt_attention_mask = negative_prompt_attention_mask.repeat(
-                1, num_images_per_prompt
-            )
-            negative_prompt_attention_mask = negative_prompt_attention_mask.view(
-                bs_embed * num_images_per_prompt, -1
-            )
-        else:
-            negative_prompt_embeds = None
-            negative_prompt_attention_mask = None
-
-        # ====== 新增文本投影层开始 ======
-        # 确保投影层存在（动态创建）
-        if not hasattr(self, 'text_projection'):
-            # 从transformer配置获取caption_channels
-            caption_channels = self.transformer.config.caption_channels
-
-        # 创建投影层 (768->4096)
-        self.text_projection = nn.Linear(
-            768, 
-            caption_channels,
-            device=device,
-            dtype=prompt_embeds.dtype if prompt_embeds is not None else torch.float32
-        )
-
-        # 将投影层注册为模块以便设备管理
-        self.text_projection = self.text_projection.to(device)
-        logger.debug(f"✅创建文本投影层: 768 -> {caption_channels}")
-
-        # 应用投影到正提示
-        if prompt_embeds is not None:
-            logger.debug(f"投影前正提示维度: {prompt_embeds.shape}")
-            prompt_embeds = self.text_projection(prompt_embeds)
-            logger.debug(f"投影后正提示维度: {prompt_embeds.shape}")
-
-        # 应用投影到负提示
-        if negative_prompt_embeds is not None:
-            logger.debug(f"投影前负提示维度: {negative_prompt_embeds.shape}")
-            negative_prompt_embeds = self.text_projection(negative_prompt_embeds)
-            logger.debug(f"投影后负提示维度: {negative_prompt_embeds.shape}")
-        # ====== 新增文本投影层结束 ======
-
-        return (
-            prompt_embeds,
-            prompt_attention_mask,
-            negative_prompt_embeds,
-            negative_prompt_attention_mask,
-        )
-
-    # 准备额外的步骤kwargs
-    def prepare_extra_step_kwargs(self, generator, eta):
-        # 为scheduler 步骤准备额外的kwargs, 因为所有的 schedulers 都具有相同的签名
-        # eta (η)仅用于DDIMScheduler, 其它调度器忽略它.
-        # eta 对应的论文 η in DDIM paper: https://arxiv.org/abs/2010.02502
-        # 并且应在 [0, 1]之间
-
-        accepts_eta = "eta" in set(
-            inspect.signature(self.scheduler.step).parameters.keys()
-        )
-        extra_step_kwargs = {}
-        if accepts_eta:
-            extra_step_kwargs["eta"] = eta
-
-        # 检查调度器是否接受 generator
-        accepts_generator = "generator" in set(
-            inspect.signature(self.scheduler.step).parameters.keys()
-        )
-        # 从这部份开始修改，确保所有张量都在同一设备上
-        if accepts_generator:                              
-            if generator is not None:                              # 增加代码：确保生成器在正确设备上
-                generator = generator.to(self._execution_device)   # 增加关键修复代码：将生成器转移到当前设备
-            extra_step_kwargs["generator"] = generator
-
-        # 确保所有值都在正确设备上
-        for key in extra_step_kwargs:                               # 新增代码
-            if isinstance(extra_step_kwargs[key], torch.Tensor):    # 新增代码
-                extra_step_kwargs[key] = extra_step_kwargs[key].to(self._execution_device)   # 新增代码
-
-        return extra_step_kwargs
-
-    # 检查输入
-    def check_inputs(
-        self,
-        prompt,
-        height,
-        width,
-        negative_prompt,
-        prompt_embeds=None,
-        negative_prompt_embeds=None,
-        prompt_attention_mask=None,
-        negative_prompt_attention_mask=None,
-        enhance_prompt=False,
-    ):
-
-        if height % 8 != 0 or width % 8 != 0: 
-            raise ValueError(
-                f"`height` and `width` 必须被 8 整除，但他们是 {height} and {width}."
-            )
-
-        if prompt is not None and prompt_embeds is not None:
-            raise ValueError(
-                f"无法转发两个 `prompt`: {提示} and `prompt_embeds`: {prompt_embeds}. 请确保"
-                " 只转发其中一个."
-            )
-        elif prompt is None and prompt_embeds is None:
-            raise ValueError(
-                "Provide either `prompt` or `prompt_embeds`. Cannot leave both `prompt` and `prompt_embeds` undefined."
-            )
-        elif prompt is not None and (
-            not isinstance(prompt, str) and not isinstance(prompt, list)
-        ):
-            raise ValueError(
-                f"`prompt` has to be of type `str` or `list` but is {type(prompt)}"
-            )
-
-        if prompt is not None and negative_prompt_embeds is not None:
-            raise ValueError(
-                f"Cannot forward both `prompt`: {prompt} and `negative_prompt_embeds`:"
-                f" {negative_prompt_embeds}. Please make sure to only forward one of the two."
-            )
-
-        if negative_prompt is not None and negative_prompt_embeds is not None: 
-            raise ValueError(
-                f"Cannot forward both `negative_prompt`: {negative_prompt} and `negative_prompt_embeds`:"
-                f" {negative_prompt_embeds}. Please make sure to only forward one of the two."
-            )
-
-        if prompt_embeds is not None and prompt_attention_mask is None:
-            raise ValueError(
-                "Must provide `prompt_attention_mask` when specifying `prompt_embeds`."
-            )
-
-        if (
-            negative_prompt_embeds is not None
-            and negative_prompt_attention_mask is None
-        ):
-            raise ValueError(
-                "Must provide `negative_prompt_attention_mask` when specifying `negative_prompt_embeds`."
-            )
-
-        if prompt_embeds is not None and negative_prompt_embeds is not None:
-            if prompt_embeds.shape != negative_prompt_embeds.shape:
-                raise ValueError(
-                    "`prompt_embeds` and `negative_prompt_embeds` must have the same shape when passed directly, but"
-                    f" got: `prompt_embeds` {prompt_embeds.shape} != `negative_prompt_embeds`"
-                    f" {negative_prompt_embeds.shape}."
-                )
-            if prompt_attention_mask.shape != negative_prompt_attention_mask.shape: 
-                raise ValueError(
-                    "`prompt_attention_mask` and `negative_prompt_attention_mask` must have the same shape when passed directly, but"
-                    f" got: `prompt_attention_mask` {prompt_attention_mask.shape} != `negative_prompt_attention_mask`"
-                    f" {negative_prompt_attention_mask.shape}."
-                )
-
-        # 如果图像增强提示
-        if enhance_prompt:
-            assert (
-                self.prompt_enhancer_image_caption_model is not None
-            ), "Image caption model must be initialized if enhance_prompt is True"
-            assert (
-                self.prompt_enhancer_image_caption_processor is not None
-            ), "Image caption processor must be initialized if enhance_prompt is True"
-            assert (
-                self.prompt_enhancer_llm_model is not None
-            ), "Text prompt enhancer model must be initialized if enhance_prompt is True"
-            assert (
-                self.prompt_enhancer_llm_tokenizer is not None
-            ), "Text prompt enhancer tokenizer must be initialized if enhance_prompt is True"
-
-    # 文本预处理
-    def _text_preprocessing(self, text):
-        if not isinstance(text, (tuple, list)):
-            text = [text]
-
-        def process(text: str):
-            text = text.strip()
-            return text
-
-        return [process(t) for t in text]
-
-    @staticmethod
-    def add_noise_to_image_conditioning_latents(
-        t: float,
-        init_latents: torch.Tensor,
-        latents: torch.Tensor,
-        noise_scale: float,
-        conditioning_mask: torch.Tensor,
-        generator,
-        eps=1e-6,
-    ):
-        noise = randn_tensor(
-            latents.shape,
-            generator=generator,
-            device=latents.device,
-            dtype=latents.dtype,
-        )
-        need_to_noise = (conditioning_mask > 1.0 - eps).unsqueeze(-1)
-        noised_latents = init_latents + noise_scale * noise * (t**2)
-        latents = torch.where(need_to_noise, noised_latents, latents)
-        return latents
-
-    def prepare_latents(
-        self,
-        latents: torch.Tensor | None,
-        media_items: torch.Tensor | None,
-        timestep: float,
-        latent_shape: torch.Size | Tuple[Any, ...],
-        dtype: torch.dtype,
-        device: torch.device,
-        generator: torch.Generator | List[torch.Generator],
-        vae_per_channel_normalize: bool = True,
-    ):
-        if isinstance(generator, list) and len(generator) != latent_shape[0]:
             logger.debug(
-                f"你传递了一个长度(length) {len(generator)}, 但请求的是有效批处理"
-                f" 大小 {latent_shape[0]}. 确保批次大小与生成器匹配."
+                f"✅图像增强模型加载成功: {prompt_enhancer_image_caption_model_name_or_path},"
             )
+        except Exception as e:
+            logger.error(f"❌图像增强模型加载失败: {prompt_enhancer_image_caption_model_name_or_path}, error: {e}")
 
-        # 使用给定的latents 或编码器的媒体项 初始化latent
-        assert (
-            latents is None or media_items is None
-        ), "Cannot provide both latents and media_items. Please provide only one of the two."
-
-        assert (
-            latents is None and media_items is None or timestep < 1.0
-        ), "Input media_item or latents are provided, but they will be replaced with noise."
-
-        if media_items is not None:
-            media_items = media_items.to(dtype=self.vae.dtype, device=self.vae.device)
-            logger.debug(f"✅prepare_latents: media_items.device = {media_items.device}, vae.device = {self.vae.device}")
-            assert media_items.device == self.vae.device, f"Media_items not on vae.device: {media_items.device} vs {self.vae.device}"
-
-            latents = vae_encode(
-                media_items.to(dtype=self.vae.dtype, device=self.vae.device),
-                self.vae,
-                vae_per_channel_normalize=vae_per_channel_normalize,
+        try:
+            prompt_enhancer_image_caption_processor = AutoProcessor.from_pretrained(  
+                prompt_enhancer_image_caption_model_name_or_path, trust_remote_code=True
             )
-            logger.debug(f"✅prepare_latents: latents.device = {latents.device}")
+            logger.debug(f"✅图像增强处理器加载成功: {prompt_enhancer_image_caption_model_name_or_path}")
+        except Exception as e:
+            logger.error(f"❌图像增强处理器加载失败: {prompt_enhancer_image_caption_model_name_or_path}, error: {e}")
 
-        if latents is not None:
-            assert (
-                latents.shape == latent_shape
-            ), f"Latents have to be of shape {latent_shape} but are {latents.shape}."
-            latents = latents.to(device=device, dtype=dtype)
-            logger.debug(f"✅prepare_latents: latents.to 后运行在: {latents.device}")
-
-        b, c, f, h, w = latent_shape
-        noise = randn_tensor(
-            (b, f * h * w, c), generator=generator, device=device, dtype=dtype
-        )
-        noise = rearrange(noise, "b (f h w) c -> b c f h w", f=f, h=h, w=w)
-        logger.debug(f"✅噪声张量设备: {noise.device}")
-
-        noise = noise * self.scheduler.init_noise_sigma
-
-        if latents is None:
-            latents = noise
-        else:
-            latents = timestep * noise + (1 - timestep) * latents
-            logger.debug(f"✅prepare_latents 最终返回 latents.device = {latents.device}")
-
-        return latents
-
-    @staticmethod
-    def classify_height_width_bin(
-        height: int, width: int, ratios: dict
-    ) -> Tuple[int, int]:
-        """返回分箱高度与宽度."""
-        ar = float(height / width)
-        closest_ratio = min(ratios.keys(), key=lambda ratio: abs(float(ratio) - ar))
-        default_hw = ratios[closest_ratio]
-
-        return int(default_hw[0]), int(default_hw[1])
-
-    @staticmethod
-    def resize_and_crop_tensor(
-        samples: torch.Tensor, new_width: int, new_height: int
-    ) -> torch.Tensor:
-        n_frames, orig_height, orig_width = samples.shape[-3:]
-
-        # 检查是否需要调整大小
-        if orig_height != new_height or orig_width != new_width:
-            ratio = max(new_height / orig_height, new_width / orig_width)
-            resized_width = int(orig_width * ratio)
-            resized_height = int(orig_height * ratio)
-
-            # 调整大小
-            samples = LTXVideoPipeline.resize_tensor(
-                samples, resized_height, resized_width
+        try:
+            prompt_enhancer_llm_model = AutoModelForCausalLM.from_pretrained( 
+                prompt_enhancer_llm_model_name_or_path,
+                torch_dtype="bfloat16",
             )
-
-            # 中心裁剪
-            start_x = (resized_width - new_width) // 2
-            end_x = start_x + new_width
-            start_y = (resized_height - new_height) // 2
-            end_y = start_y + new_height
-            samples = samples[..., start_y:end_y, start_x:end_x]
-
-        return samples
-
-    @staticmethod
-    # 调整张量
-    def resize_tensor(media_items, height, width):
-        n_frames = media_items.shape[2]
-        if media_items.shape[-2:] != (height, width):
-            media_items = rearrange(media_items, "b c n h w -> (b n) c h w")
-            media_items = F.interpolate(
-                media_items,
-                size=(height, width),
-                mode="bilinear",
-                align_corners=False,
+            logger.debug(
+                f"✅提示词增强LLM语言模型加载成功: {prompt_enhancer_llm_model_name_or_path}," 
             )
-            media_items = rearrange(media_items, "(b n) c h w -> b c n h w", n=n_frames)
+        except Exception as e:
+            logger.error(f"❌提示词增强LLM语言模型加载失败: {prompt_enhancer_llm_model_name_or_path}, error: {e}")
 
-        return media_items
-
-    @torch.no_grad()
-    def __call__(
-        self,
-        height: int,
-        width: int,
-        num_frames: int,
-        frame_rate: float,
-        prompt: Union[str, List[str]] = None,
-        negative_prompt: str = "",
-        num_inference_steps: int = 20,
-        skip_initial_inference_steps: int = 0,
-        skip_final_inference_steps: int = 0,
-        timesteps: List[int] = None,
-        guidance_scale: Union[float, List[float]] = 4.5,
-        cfg_star_rescale: bool = False,
-        skip_layer_strategy: Optional[SkipLayerStrategy] = None,
-        skip_block_list: Optional[Union[List[List[int]], List[int]]] = None,
-        stg_scale: Union[float, List[float]] = 1.0,
-        rescaling_scale: Union[float, List[float]] = 0.7,
-        guidance_timesteps: Optional[List[int]] = None,
-        num_images_per_prompt: Optional[int] = 1,
-        eta: float = 0.0,
-        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
-        latents: Optional[torch.FloatTensor] = None,
-        prompt_embeds: Optional[torch.FloatTensor] = None,
-        prompt_attention_mask: Optional[torch.FloatTensor] = None,
-        negative_prompt_embeds: Optional[torch.FloatTensor] = None,
-        negative_prompt_attention_mask: Optional[torch.FloatTensor] = None,
-        output_type: Optional[str] = "pil",
-        return_dict: bool = True,
-        callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
-        conditioning_items: Optional[List[ConditioningItem]] = None,
-        decode_timestep: Union[List[float], float] = 0.0,
-        decode_noise_scale: Optional[List[float]] = None,
-        mixed_precision: bool = False,
-        offload_to_cpu: bool = False,
-        enhance_prompt: bool = False,
-        text_encoder_max_tokens: int = 256,
-        stochastic_sampling: bool = False,
-        media_items: Optional[torch.Tensor] = None,
-        **kwargs,
-    ) -> Union[ImagePipelineOutput, Tuple]:
-        """
-        调用pipeline 进行生成时的函数.
-        例子:
-        返回:
-            [`~pipelines.ImagePipelineOutput`] or `tuple`:
-                If `return_dict` is `True`, [`~pipelines.ImagePipelineOutput`] is returned, otherwise a `tuple` is
-                returned where the first element is a list with the generated images
-        """
-        if "mask_feature" in kwargs:
-            deprecation_message = "The use of `mask_feature` is deprecated. It is no longer used in any computation and that doesn't affect the end results. It will be removed in a future version."
-            deprecate("mask_feature", "1.0.0", deprecation_message, standard_warn=False)
-
-        is_video = kwargs.get("is_video", False)
-        self.check_inputs(
-            prompt,
-            height,
-            width,
-            negative_prompt,
-            prompt_embeds,                                 # 提示嵌入
-            negative_prompt_embeds,                        # 反向提示嵌入
-            prompt_attention_mask,
-            negative_prompt_attention_mask,
-        )
-        logger.debug(f"✅is_video: 高度{height}, 宽度{width}")
-        logger.debug(f"✅is_video原始提示词: {prompt}")
-        logger.debug(f"✅is_video反向提示词: {negative_prompt}")
-
-        # 2. transformer的默认高度与宽度
-        if prompt is not None and isinstance(prompt, str):
-            batch_size = 1
-        elif prompt is not None and isinstance(prompt, list):
-            batch_size = len(prompt)
-        else:
-            batch_size = prompt_embeds.shape[0]
-
-        device = self._execution_device
-
-        self.video_scale_factor = self.video_scale_factor if is_video else 1
-        vae_per_channel_normalize = kwargs.get("vae_per_channel_normalize", True)
-        image_cond_noise_scale = kwargs.get("image_cond_noise_scale", 0.0)
-
-        latent_height = height // self.vae_scale_factor
-        latent_width = width // self.vae_scale_factor
-        latent_num_frames = num_frames // self.video_scale_factor
-        if isinstance(self.vae, CausalVideoAutoencoder) and is_video:
-            latent_num_frames += 1
-        latent_shape = (
-            batch_size * num_images_per_prompt,
-            self.transformer.config.in_channels,
-            latent_num_frames,
-            latent_height,
-            latent_width,
-        )
-        logger.debug(f"✅默认高度与宽度: 高度{latent_height}, 宽度{latent_width}")
-
-        # 准备降噪时间步长列表
-
-        retrieve_timesteps_kwargs = {}
-        if isinstance(self.scheduler, TimestepShifter):
-            retrieve_timesteps_kwargs["samples_shape"] = latent_shape
-
-        assert (
-            skip_initial_inference_steps == 0
-            or latents is not None
-            or media_items is not None
-        ), (
-            f"skip_initial_inference_steps ({skip_initial_inference_steps}) is used for image-to-image/video-to-video - "
-            "media_item or latents should be provided."
-        )
-
-        timesteps, num_inference_steps = retrieve_timesteps(
-            self.scheduler,
-            num_inference_steps,
-            device,
-            timesteps,
-            skip_initial_inference_steps=skip_initial_inference_steps,
-            skip_final_inference_steps=skip_final_inference_steps,
-            **retrieve_timesteps_kwargs,
-        )
-
-        if self.allowed_inference_steps is not None:
-            for timestep in [round(x, 4) for x in timesteps.tolist()]:
-                assert (
-                    timestep in self.allowed_inference_steps
-                ), f"Invalid inference timestep {timestep}. Allowed timesteps are {self.allowed_inference_steps}."
-
-        if guidance_timesteps:
-            guidance_mapping = []
-            for timestep in timesteps:
-                indices = [
-                    i for i, val in enumerate(guidance_timesteps) if val <= timestep
-                ]
-                # assert len(indices) > 0, f"No guidance timestep found for {timestep}"
-                guidance_mapping.append(
-                    indices[0] if len(indices) > 0 else (len(guidance_timesteps) - 1)
-                )
-                logger.debug(f"✅管道文件时间步长: {indices}")
-
-        if not isinstance(guidance_scale, List):
-            guidance_scale = [guidance_scale] * len(timesteps)
-        else:
-            guidance_scale = [
-                guidance_scale[guidance_mapping[i]] for i in range(len(timesteps))
-            ]
-
-        guidance_scale = [x if x > 1.0 else 0.0 for x in guidance_scale]
-
-        if not isinstance(stg_scale, List):
-            stg_scale = [stg_scale] * len(timesteps)
-        else:
-            stg_scale = [stg_scale[guidance_mapping[i]] for i in range(len(timesteps))]
-
-        if not isinstance(rescaling_scale, List):
-            rescaling_scale = [rescaling_scale] * len(timesteps)
-        else:
-            rescaling_scale = [
-                rescaling_scale[guidance_mapping[i]] for i in range(len(timesteps))
-            ]
-
-        do_classifier_free_guidance = any(x > 1.0 for x in guidance_scale)
-        do_spatio_temporal_guidance = any(x > 0.0 for x in stg_scale)
-        do_rescaling = any(x != 1.0 for x in rescaling_scale)
-
-        num_conds = 1
-        if do_classifier_free_guidance:
-            num_conds += 1
-        if do_spatio_temporal_guidance:
-            num_conds += 1
-
-        # 如果需要将单个列表转换为列表
-        if skip_block_list is not None:
-            # Convert single list to list of lists if needed
-            if len(skip_block_list) == 0 or not isinstance(skip_block_list[0], list):
-                skip_block_list = [skip_block_list] * len(timesteps)
-            else:
-                new_skip_block_list = []
-                for i, timestep in enumerate(timesteps):
-                    new_skip_block_list.append(skip_block_list[guidance_mapping[i]])
-                skip_block_list = new_skip_block_list
-
-        # 准备跳过图层蒙版
-        skip_layer_masks: Optional[List[torch.Tensor]] = None
-        if do_spatio_temporal_guidance:
-            if skip_block_list is not None:
-                skip_layer_masks = [
-                    self.transformer.create_skip_layer_mask(
-                        batch_size, num_conds, num_conds - 1, skip_blocks
-                    )
-                    for skip_blocks in skip_block_list
-                ]
-
-        if enhance_prompt:
-            self.prompt_enhancer_image_caption_model = (
-                self.prompt_enhancer_image_caption_model.to(self._execution_device)
+        try:
+            prompt_enhancer_llm_tokenizer = AutoTokenizer.from_pretrained( 
+                prompt_enhancer_llm_model_name_or_path,
             )
-            self.prompt_enhancer_llm_model = self.prompt_enhancer_llm_model.to(
-                self._execution_device
-            )
-
-            prompt = generate_cinematic_prompt(
-                self.prompt_enhancer_image_caption_model,
-                self.prompt_enhancer_image_caption_processor,
-                self.prompt_enhancer_llm_model,
-                self.prompt_enhancer_llm_tokenizer,
-                prompt,
-                conditioning_items,
-                max_new_tokens=text_encoder_max_tokens,
-            )
-            # 添加日志记录增强后的提示词
-            logger.debug(f"✅增强后的提示词: {prompt}")
-
-        # 3. 对输入的提示进行编码
-        if self.text_encoder is not None:
-            self.text_encoder = self.text_encoder.to(self._execution_device)
-
-        (
-            prompt_embeds,
-            prompt_attention_mask,
-            negative_prompt_embeds,
-            negative_prompt_attention_mask,
-        ) = self.encode_prompt(
-            prompt,
-            do_classifier_free_guidance,
-            negative_prompt=negative_prompt,
-            num_images_per_prompt=num_images_per_prompt,
-            device=device,
-            prompt_embeds=prompt_embeds,
-            negative_prompt_embeds=negative_prompt_embeds,
-            prompt_attention_mask=prompt_attention_mask,
-            negative_prompt_attention_mask=negative_prompt_attention_mask,
-            text_encoder_max_tokens=text_encoder_max_tokens,
-        )
-
-        if offload_to_cpu and self.text_encoder is not None:
-            self.text_encoder = self.text_encoder.cpu()
-
-        self.transformer = self.transformer.to(self._execution_device)
-
-        prompt_embeds_batch = prompt_embeds
-        prompt_attention_mask_batch = prompt_attention_mask
-        if do_classifier_free_guidance:
-            prompt_embeds_batch = torch.cat(
-                [negative_prompt_embeds, prompt_embeds], dim=0
-            )
-            prompt_attention_mask_batch = torch.cat(
-                [negative_prompt_attention_mask, prompt_attention_mask], dim=0
-            )
-        if do_spatio_temporal_guidance:
-            prompt_embeds_batch = torch.cat([prompt_embeds_batch, prompt_embeds], dim=0)
-            prompt_attention_mask_batch = torch.cat(
-                [
-                    prompt_attention_mask_batch,
-                    prompt_attention_mask,
-                ],
-                dim=0,
-            )
-        logger.debug(f"✅文本编码模型输出文本编码内容: {prompt_embeds}")
-        if negative_prompt_embeds is not None:
-            logger.debug(f"✅负面提示词编码内容: {negative_prompt_embeds}")
- 
-        # 准备初台潜在张量, shape = (b, c, f, h, w),使用提供的介质和调节项准备初始 latent
-        latents = self.prepare_latents(
-            latents=latents,
-            media_items=media_items,
-            timestep=timesteps[0],
-            latent_shape=latent_shape,
-            dtype=prompt_embeds_batch.dtype,
-            device=device,
-            generator=generator,
-            vae_per_channel_normalize=vae_per_channel_normalize,
-        )
-
-        # 用条件项更新latents 并将他们修补成(b, n, c)
-        latents, pixel_coords, conditioning_mask, num_cond_latents = (
-            self.prepare_conditioning(
-                conditioning_items=conditioning_items,
-                init_latents=latents,
-                num_frames=num_frames,
-                height=height,
-                width=width,
-                vae_per_channel_normalize=vae_per_channel_normalize,
-                generator=generator,
-            )
-        )
-        init_latents = latents.clone()  # 用于 image_cond_noise_update
-
-        pixel_coords = torch.cat([pixel_coords] * num_conds)
-        orig_conditioning_mask = conditioning_mask
-        if conditioning_mask is not None and is_video:
-            assert num_images_per_prompt == 1
-            conditioning_mask = torch.cat([conditioning_mask] * num_conds)
-        fractional_coords = pixel_coords.to(torch.float32)
-        fractional_coords[:, 0] = fractional_coords[:, 0] * (1.0 / frame_rate)
-
-        # 6. 准备额外的步骤
-        extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
-
-        # 7. 去噪循环
-        num_warmup_steps = max(
-            len(timesteps) - num_inference_steps * self.scheduler.order, 0
-        )
-
-        with self.progress_bar(total=num_inference_steps) as progress_bar:
-            for i, t in enumerate(timesteps):
-                if conditioning_mask is not None and image_cond_noise_scale > 0.0:
-                    latents = self.add_noise_to_image_conditioning_latents(
-                        t,
-                        init_latents,
-                        latents,
-                        image_cond_noise_scale,
-                        orig_conditioning_mask,
-                        generator,
-                    )
-
-                latent_model_input = (
-                    torch.cat([latents] * num_conds) if num_conds > 1 else latents
-                )
-                latent_model_input = self.scheduler.scale_model_input(
-                    latent_model_input, t
-                )
-
-                current_timestep = t
-                if not torch.is_tensor(current_timestep):
-                    # TODO: 这需要 CPU 和 GPU同步. 如果可以，请尝试将时间步长作为张量传递
-                    # This would be a good case for the `match` statement (Python 3.10+)
-                    is_mps = latent_model_input.device.type == "mps"
-                    if isinstance(current_timestep, float):
-                        dtype = torch.float32 if is_mps else torch.float64
-                    else:
-                        dtype = torch.int32 if is_mps else torch.int64
-                    current_timestep = torch.tensor(
-                        [current_timestep],
-                        dtype=dtype,
-                        device=latent_model_input.device,
-                    )
-                elif len(current_timestep.shape) == 0:
-                    current_timestep = current_timestep[None].to(
-                        latent_model_input.device
-                    )
-
-                current_timestep = current_timestep.expand(
-                    latent_model_input.shape[0]
-                ).unsqueeze(-1)
-
-                if conditioning_mask is not None:
-                    # Conditioning latents have an initial timestep and noising level of (1.0 - conditioning_mask)
-                    # and will start to be denoised when the current timestep is lower than their conditioning timestep.
-                    current_timestep = torch.min(
-                        current_timestep, 1.0 - conditioning_mask
-                    )
-
-                # 根据 `mixed_precision`选择合适的上下文管理器
-                if mixed_precision:
-                    context_manager = torch.autocast(device.type, dtype=torch.bfloat16)
-                else:
-                    context_manager = nullcontext()  # Dummy context manager
-
-                # 预测噪声 model_output
-                with context_manager:
-                    logger.debug(f"✅模型输入设备: {latent_model_input.device}")
-                    logger.debug(f"✅坐标输入设备: {fractional_coords.device}")
-                    logger.debug(f"✅提示词嵌入设备: {prompt_embeds_batch.device}")
-                    assert latent_model_input.device == self._execution_device
-                    assert fractional_coords.device == self._execution_device
-                    assert prompt_embeds_batch.device == self._execution_device
-
-                    noise_pred = self.transformer(
-                        latent_model_input.to(self.transformer.dtype),
-                        indices_grid=fractional_coords,
-                        encoder_hidden_states=prompt_embeds_batch.to(
-                            self.transformer.dtype
-                        ),
-                        encoder_attention_mask=prompt_attention_mask_batch,
-                        timestep=current_timestep,
-                        skip_layer_mask=(
-                            skip_layer_masks[i]
-                            if skip_layer_masks is not None
-                            else None
-                        ),
-                        skip_layer_strategy=skip_layer_strategy,
-                        return_dict=False,
-                    )[0]
-                    logger.debug(f"✅noise_pred.device: {noise_pred.device}")
-
-                # 执行指导
-                if do_spatio_temporal_guidance:
-                    noise_pred_text, noise_pred_text_perturb = noise_pred.chunk(
-                        num_conds
-                    )[-2:]
-                if do_classifier_free_guidance:
-                    noise_pred_uncond, noise_pred_text = noise_pred.chunk(num_conds)[:2]
-
-                    if cfg_star_rescale:
-                        # Rescales the unconditional noise prediction using the projection of the conditional prediction onto it:
-                        # α = (⟨ε_text, ε_uncond⟩ / ||ε_uncond||²), then ε_uncond ← α * ε_uncond
-                        # where ε_text is the conditional noise prediction and ε_uncond is the unconditional one.
-                        positive_flat = noise_pred_text.view(batch_size, -1)
-                        negative_flat = noise_pred_uncond.view(batch_size, -1)
-                        dot_product = torch.sum(
-                            positive_flat * negative_flat, dim=1, keepdim=True
-                        )
-                        squared_norm = (
-                            torch.sum(negative_flat**2, dim=1, keepdim=True) + 1e-8
-                        )
-                        alpha = dot_product / squared_norm
-                        noise_pred_uncond = alpha * noise_pred_uncond
-
-                    noise_pred = noise_pred_uncond + guidance_scale[i] * (
-                        noise_pred_text - noise_pred_uncond
-                    )
-                elif do_spatio_temporal_guidance:
-                    noise_pred = noise_pred_text
-                if do_spatio_temporal_guidance:
-                    noise_pred = noise_pred + stg_scale[i] * (
-                        noise_pred_text - noise_pred_text_perturb
-                    )
-                    if do_rescaling and stg_scale[i] > 0.0:
-                        noise_pred_text_std = noise_pred_text.view(batch_size, -1).std(
-                            dim=1, keepdim=True
-                        )
-                        noise_pred_std = noise_pred.view(batch_size, -1).std(
-                            dim=1, keepdim=True
-                        )
-
-                        factor = noise_pred_text_std / noise_pred_std
-                        factor = rescaling_scale[i] * factor + (1 - rescaling_scale[i])
-
-                        noise_pred = noise_pred * factor.view(batch_size, 1, 1)
-
-                current_timestep = current_timestep[:1]
-                # 学习 sigma
-                if (
-                    self.transformer.config.out_channels // 2
-                    == self.transformer.config.in_channels
-                ):
-                    noise_pred = noise_pred.chunk(2, dim=1)[0]
-
-                # 计算上一个镜像: x_t -> x_t-1
-                latents = self.denoising_step(
-                    latents,
-                    noise_pred,
-                    current_timestep,
-                    orig_conditioning_mask,
-                    t,
-                    extra_step_kwargs,
-                    stochastic_sampling=stochastic_sampling,
-                )
-
-                # 调用回调, if provided
-                if i == len(timesteps) - 1 or (
-                    (i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0
-                ):
-                    progress_bar.update()
-
-                if callback_on_step_end is not None:
-                    callback_on_step_end(self, i, t, {})
-
-        if offload_to_cpu:
-            self.transformer = self.transformer.cpu()
-            if self._execution_device == "cuda":
-                torch.cuda.empty_cache()
-
-        # 添加删除的 conditioning latents
-        latents = latents[:, num_cond_latents:]
-
-        latents = self.patchifier.unpatchify(
-            latents=latents,
-            output_height=latent_height,
-            output_width=latent_width,
-            out_channels=self.transformer.in_channels
-            // math.prod(self.patchifier.patch_size),
-        )
-        if output_type != "latent":
-            if self.vae.decoder.timestep_conditioning:
-                noise = torch.randn_like(latents)
-                if not isinstance(decode_timestep, list):
-                    decode_timestep = [decode_timestep] * latents.shape[0]
-                if decode_noise_scale is None:
-                    decode_noise_scale = decode_timestep
-                elif not isinstance(decode_noise_scale, list):
-                    decode_noise_scale = [decode_noise_scale] * latents.shape[0]
-
-                decode_timestep = torch.tensor(decode_timestep).to(latents.device)
-                decode_noise_scale = torch.tensor(decode_noise_scale).to(
-                    latents.device
-                )[:, None, None, None, None]
-                latents = (
-                    latents * (1 - decode_noise_scale) + noise * decode_noise_scale
-                )
-            else:
-                decode_timestep = None
-            image = vae_decode(
-                latents,
-                self.vae,
-                is_video,
-                vae_per_channel_normalize=kwargs["vae_per_channel_normalize"],
-                timestep=decode_timestep,
-            )
-
-            image = self.image_processor.postprocess(image, output_type=output_type)
-            logger.debug(f"✅视频生成管道生成图像") 
-
-        else:
-            image = latents
-
-        # 卸载所有模型
-        self.maybe_free_model_hooks()
-
-        if not return_dict:
-            return (image,)
-
-        return ImagePipelineOutput(images=image)
-
-    def denoising_step(
-        self,
-        latents: torch.Tensor,
-        noise_pred: torch.Tensor,
-        current_timestep: torch.Tensor,
-        conditioning_mask: torch.Tensor,
-        t: float,
-        extra_step_kwargs,
-        t_eps=1e-6,
-        stochastic_sampling=False,
-    ):
-        logger.debug(f"✅去噪输入潜在变量设备: {latents.device}")
-        logger.debug(f"✅噪声预测设备: {noise_pred.device}")
-
-        # Denoise the latents using the scheduler
-        denoised_latents = self.scheduler.step(
-            noise_pred,
-            t if current_timestep is None else current_timestep,
-            latents,
-            **extra_step_kwargs,
-            return_dict=False,
-            stochastic_sampling=stochastic_sampling,
-        )[0]
-        logger.debug(f"✅denoised_latents.device: {denoised_latents.device}")
-
-        if conditioning_mask is None:
-            return denoised_latents
-
-        tokens_to_denoise_mask = (t - t_eps < (1.0 - conditioning_mask)).unsqueeze(-1)
-        return torch.where(tokens_to_denoise_mask, denoised_latents, latents)
-
-    # 准备条件
-    def prepare_conditioning(
-        self,
-        conditioning_items: Optional[List[ConditioningItem]],
-        init_latents: torch.Tensor,
-        num_frames: int,
-        height: int,
-        width: int,
-        vae_per_channel_normalize: bool = False,
-        generator=None,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
-
-        assert isinstance(self.vae, CausalVideoAutoencoder)
-
-        if conditioning_items:
-            batch_size, _, num_latent_frames = init_latents.shape[:3]
-
-            init_conditioning_mask = torch.zeros(
-                init_latents[:, 0, :, :, :].shape,
-                dtype=torch.float32,
-                device=init_latents.device,
-            )
-            logger.debug(f"✅条件掩码设备: {init_conditioning_mask.device}")
-
-            extra_conditioning_latents = []
-            extra_conditioning_pixel_coords = []
-            extra_conditioning_mask = []
-            extra_conditioning_num_latents = 0  # Number of extra conditioning latents added (should be removed before decoding)
-
-            # 处理每个条件项
-            for conditioning_item in conditioning_items:
-                conditioning_item = self._resize_conditioning_item(
-                    conditioning_item, height, width
-                )
-                media_item = conditioning_item.media_item
-                media_frame_number = conditioning_item.media_frame_number
-                strength = conditioning_item.conditioning_strength
-                assert media_item.ndim == 5  # (b, c, f, h, w)
-                b, c, n_frames, h, w = media_item.shape
-                assert (
-                    height == h and width == w
-                ) or media_frame_number == 0, f"Dimensions do not match: {height}x{width} != {h}x{w} - allowed only when media_frame_number == 0"
-                logger.debug(f"✅管道文件获取高度宽度条件: 高度={height}x{width}, 媒体尺寸={h}x{w}")
-                assert n_frames % 8 == 1
-                assert (
-                    media_frame_number >= 0
-                    and media_frame_number + n_frames <= num_frames
-                )
-
-                # 对提供的conditioning 媒体项进行编码
-                media_item_latents = vae_encode(
-                    media_item.to(dtype=self.vae.dtype, device=self.vae.device),
-                    self.vae,
-                    vae_per_channel_normalize=vae_per_channel_normalize,
-                ).to(dtype=init_latents.dtype)
-                logger.debug(f"✅条件项更新: media_item_latents.device = {media_item_latents.device}, vae.device = {self.vae.device}")
-                assert media_item_latents.device == self.vae.device, f"media_item_latents.device mismatch: {media_item_latents.device} vs {self.vae.device}"
-
-                # 处理不同条件情况
-                if media_frame_number == 0:
-                    # 获取潜在条件项的目标空间位置
-                    media_item_latents, l_x, l_y = self._get_latent_spatial_position(
-                        media_item_latents,
-                        conditioning_item,
-                        height,
-                        width,
-                        strip_latent_border=True,
-                    )
-                    b, c_l, f_l, h_l, w_l = media_item_latents.shape
-
-
-                    # 第一帧或第一帧序列 - 只需更新初始噪声潜伏物与掩码
-                    init_latents[:, :, :f_l, l_y : l_y + h_l, l_x : l_x + w_l] = (
-                        torch.lerp(
-                            init_latents[:, :, :f_l, l_y : l_y + h_l, l_x : l_x + w_l],
-                            media_item_latents,
-                            strength,
-                        )
-                    )
-                    init_conditioning_mask[
-                        :, :f_l, l_y : l_y + h_l, l_x : l_x + w_l
-                    ] = strength
-                else:
-                    # Non-first frame or sequence
-                    if n_frames > 1:
-                        # Handle non-first sequence.
-                        # Encoded latents are either fully consumed, or the prefix is handled separately below.
-                        (
-                            init_latents,
-                            init_conditioning_mask,
-                            media_item_latents,
-                        ) = self._handle_non_first_conditioning_sequence(
-                            init_latents,
-                            init_conditioning_mask,
-                            media_item_latents,
-                            media_frame_number,
-                            strength,
-                        )
-
-                    # 单帧或序列前缀潜在值
-                    if media_item_latents is not None:
-                        noise = randn_tensor(
-                            media_item_latents.shape,
-                            generator=generator,
-                            device=media_item_latents.device,
-                            dtype=media_item_latents.dtype,
-                        )
-                        logger.debug(f"✅条件 noise 张量 device: {noise.device}")
-
-                        media_item_latents = torch.lerp(
-                            noise, media_item_latents, strength
-                        )
-
-                        # 修补额外的条件潜在变量并计算他们的像素坐标
-                        media_item_latents, latent_coords = self.patchifier.patchify(
-                            latents=media_item_latents
-                        )
-                        pixel_coords = latent_to_pixel_coords(
-                            latent_coords,
-                            self.vae,
-                            causal_fix=self.transformer.config.causal_temporal_positioning,
-                        )
-                        logger.debug(f"✅像素坐标: {pixel_coords}")
-
-                        # 更新帧号以匹配目标帧号
-                        pixel_coords[:, 0] += media_frame_number
-                        extra_conditioning_num_latents += media_item_latents.shape[1]
-
-                        conditioning_mask = torch.full(
-                            media_item_latents.shape[:2],
-                            strength,
-                            dtype=torch.float32,
-                            device=init_latents.device,
-                        )
-                        logger.debug(f"✅conditioning_mask device: {conditioning_mask.device}")
-
-                        extra_conditioning_latents.append(media_item_latents)
-                        extra_conditioning_pixel_coords.append(pixel_coords)
-                        extra_conditioning_mask.append(conditioning_mask)
-
-        # 修补更新潜在值并计算他们的像素坐标
-        init_latents, init_latent_coords = self.patchifier.patchify(
-            latents=init_latents
-        )
-        logger.debug(f"✅patchify 后 init_latents.device: {init_latents.device}")
-
-        init_pixel_coords = latent_to_pixel_coords(
-            init_latent_coords,
-            self.vae,
-            causal_fix=self.transformer.config.causal_temporal_positioning,
-        )
-
-        if not conditioning_items:
-            return init_latents, init_pixel_coords, None, 0
-
-        init_conditioning_mask, _ = self.patchifier.patchify(
-            latents=init_conditioning_mask.unsqueeze(1)
-        )
-        init_conditioning_mask = init_conditioning_mask.squeeze(-1)
-        logger.debug(f"✅patchify 后 init_conditioning_mask.device: {init_conditioning_mask.device}")
-
-        if extra_conditioning_latents:
-            # 堆叠额外的条件latents像素坐标与掩码，这此列表中张量其中一个仍是 CPU，其它是 cuda，就会抛出遇到的错误。
-            init_latents = torch.cat([*extra_conditioning_latents, init_latents], dim=1)
-            init_pixel_coords = torch.cat(
-                [*extra_conditioning_pixel_coords, init_pixel_coords], dim=2
-            )
-            init_conditioning_mask = torch.cat(
-                [*extra_conditioning_mask, init_conditioning_mask], dim=1
-            )
-
-            if self.transformer.use_tpu_flash_attention:
-                init_latents = init_latents[:, :-extra_conditioning_num_latents]
-                init_pixel_coords = init_pixel_coords[
-                    :, :, :-extra_conditioning_num_latents
-                ]
-                init_conditioning_mask = init_conditioning_mask[
-                    :, :-extra_conditioning_num_latents
-                ]
-
-        return (
-            init_latents,
-            init_pixel_coords,
-            init_conditioning_mask,
-            extra_conditioning_num_latents,
-        )
-
-    @staticmethod
-    def _resize_conditioning_item(
-        conditioning_item: ConditioningItem,
-        height: int,
-        width: int,
-    ):
-        if conditioning_item.media_x or conditioning_item.media_y:
-            raise ValueError(
-                "Provide media_item in the target size for spatial conditioning."
-            )
-        new_conditioning_item = copy.copy(conditioning_item)
-        new_conditioning_item.media_item = LTXVideoPipeline.resize_tensor(
-            conditioning_item.media_item, height, width
-        )
-        return new_conditioning_item
-
-    # 获取条件项在潜在空间的空间位置
-    def _get_latent_spatial_position(
-        self,
-        latents: torch.Tensor,
-        conditioning_item: ConditioningItem,
-        height: int,
-        width: int,
-        strip_latent_border,
-    ):
-        scale = self.vae_scale_factor
-        h, w = conditioning_item.media_item.shape[-2:]
-        assert (
-            h <= height and w <= width
-        ), f"Conditioning item size {h}x{w} is larger than target size {height}x{width}"
-        assert h % scale == 0 and w % scale == 0
-
-        # 计算媒体项的开始与结束空间位置
-        x_start, y_start = conditioning_item.media_x, conditioning_item.media_y
-        x_start = (width - w) // 2 if x_start is None else x_start
-        y_start = (height - h) // 2 if y_start is None else y_start
-        x_end, y_end = x_start + w, y_start + h
-        assert (
-            x_end <= width and y_end <= height
-        ), f"Conditioning item {x_start}:{x_end}x{y_start}:{y_end} is out of bounds for target size {width}x{height}"
-
-        if strip_latent_border:
-            # Strip one latent from left/right and/or top/bottom, update x, y accordingly
-            if x_start > 0:
-                x_start += scale
-                latents = latents[:, :, :, :, 1:]
-
-            if y_start > 0:
-                y_start += scale
-                latents = latents[:, :, :, 1:, :]
-
-            if x_end < width:
-                latents = latents[:, :, :, :, :-1]
-
-            if y_end < height:
-                latents = latents[:, :, :, :-1, :]
-
-        return latents, x_start // scale, y_start // scale
-
-    @staticmethod
-    def _handle_non_first_conditioning_sequence(
-        init_latents: torch.Tensor,
-        init_conditioning_mask: torch.Tensor,
-        latents: torch.Tensor,
-        media_frame_number: int,
-        strength: float,
-        num_prefix_latent_frames: int = 2,
-        prefix_latents_mode: str = "concat",
-        prefix_soft_conditioning_strength: float = 0.15,
-    ):
-        f_l = latents.shape[2]
-        f_l_p = num_prefix_latent_frames
-        assert f_l >= f_l_p
-        assert media_frame_number % 8 == 0
-        if f_l > f_l_p:
-            f_l_start = media_frame_number // 8 + f_l_p
-            f_l_end = f_l_start + f_l - f_l_p
-            init_latents[:, :, f_l_start:f_l_end] = torch.lerp(
-                init_latents[:, :, f_l_start:f_l_end],
-                latents[:, :, f_l_p:],
-                strength,
-            )
-            init_conditioning_mask[:, f_l_start:f_l_end] = strength
-            logger.debug(f"✅管道文件完整数据: {strength}")
-
-        if prefix_latents_mode == "soft":
-            if f_l_p > 1:
-                # Drop the first (single-frame) latent and soft-condition the remaining prefix
-                f_l_start = media_frame_number // 8 + 1
-                f_l_end = f_l_start + f_l_p - 1
-                strength = min(prefix_soft_conditioning_strength, strength)
-                init_latents[:, :, f_l_start:f_l_end] = torch.lerp(
-                    init_latents[:, :, f_l_start:f_l_end],
-                    latents[:, :, 1:f_l_p],
-                    strength,
-                )
-                init_conditioning_mask[:, f_l_start:f_l_end] = strength
-            latents = None  # No more latents to handle
-        elif prefix_latents_mode == "drop":
-            latents = None
-        elif prefix_latents_mode == "concat":
-            latents = latents[:, :, :f_l_p]
-        else:
-            raise ValueError(f"Invalid prefix_latents_mode: {prefix_latents_mode}")
-        return (
-            init_latents,
-            init_conditioning_mask,
-            latents,
-        )
-
-    def trim_conditioning_sequence(
-        self, start_frame: int, sequence_num_frames: int, target_num_frames: int
-    ):
-        scale_factor = self.video_scale_factor
-        num_frames = min(sequence_num_frames, target_num_frames - start_frame)
-        # Trim down to a multiple of temporal_scale_factor frames plus 1
-        num_frames = (num_frames - 1) // scale_factor * scale_factor + 1
-        logger.debug(f"✅管道文件完整数据: {num_frames}")
-        return num_frames
-
-
-def adain_filter_latent(
-    latents: torch.Tensor, reference_latents: torch.Tensor, factor=1.0
+            logger.debug(f"✅提示词增强LLM分词器加载成功: {prompt_enhancer_llm_model_name_or_path}")
+        except Exception as e:
+            logger.error(f"❌提示词增强LLM分词器加载失败: {prompt_enhancer_llm_model_name_or_path}, error: {e}")
+
+    else:
+        prompt_enhancer_image_caption_model = None
+        prompt_enhancer_image_caption_processor = None
+        prompt_enhancer_llm_model = None
+        prompt_enhancer_llm_tokenizer = None
+
+    # ==== 修改开始: 自动适配精度 ====
+    dtype = get_supported_precision()  # 新增
+    vae = vae.to(dtype)                # 修改
+    if precision in ["bfloat16", "float16"]:
+        transformer = transformer.to(dtype)   # 修改
+    text_encoder = text_encoder.to(dtype)     # 修改
+
+    # 将子模型用于pipeline，创建子模型字典
+    submodel_dict = {
+        "transformer": transformer,                               # 将注意力机制模型
+        "patchifier": patchifier,                                 # 修补器
+        "text_encoder": text_encoder,                             # 文本编码器
+        "tokenizer": tokenizer,                                   # 分词器
+        "scheduler": scheduler,                                   # 调度程序
+        "vae": vae,                                               # 变分自编码器
+        "prompt_enhancer_image_caption_model": prompt_enhancer_image_caption_model,                # 图像增强模型
+        "prompt_enhancer_image_caption_processor": prompt_enhancer_image_caption_processor,        # 图像增强模型处理器
+        "prompt_enhancer_llm_model": prompt_enhancer_llm_model,                                    # 提示词增强模型
+        "prompt_enhancer_llm_tokenizer": prompt_enhancer_llm_tokenizer,                            # 提示词增强模型分词器
+        "allowed_inference_steps": allowed_inference_steps,                                        # 允许的推理步数
+    }
+
+    pipeline = LTXVideoPipeline(**submodel_dict)      # 管道等于视频生成子模型字典
+    pipeline = pipeline.to(device)                    # 将管道转移到设备上
+    return pipeline                                    # 返回管道
+
+def create_latent_upsampler(latent_upsampler_model_path: str, device: str):
+    # 动态上采样器：采样器模型路径
+
+    latent_upsampler = LatentUpsampler.from_pretrained(latent_upsampler_model_path)
+    latent_upsampler.to(device) 
+    latent_upsampler.eval()
+    logger.debug(f"✅潜空间上采样模型加载成功: {latent_upsampler}")
+    logger.debug(f"✅潜空间上采样模型运行设备: {latent_upsampler.device}")
+    return latent_upsampler
+
+# 定义推断
+def infer(
+    output_path: Optional[str],                                        # 输出路径：自选
+    seed: int,                                                         # 种子
+    pipeline_config: str,                                              # 管道配置文件路径
+    image_cond_noise_scale: float,                                     # 图像条件
+    height: Optional[int],                                             # 图像高：自选
+    width: Optional[int],
+    num_frames: int,
+    frame_rate: int,
+    prompt: str,                                                       # 提示词
+    negative_prompt: str,                                              # 反向提示词
+    offload_to_cpu: bool,                                              # 将计算任务转移到cpu：Offload 技术将GPU显存中的权重卸载到CPU内存
+    input_media_path: Optional[str] = None,                            # 输入媒体路径：自选列表
+    conditioning_media_paths: Optional[List[str]] = None,              # 条件媒体路径：自选列表             
+    conditioning_strengths: Optional[List[float]] = None,              # 条件强度：自选列表
+    conditioning_start_frames: Optional[List[int]] = None,             # 条件开始框架：自选输入
+    device: Optional[str] = None,                                      # 设备：自选
+    **kwargs,                                                          # 关键字参数字典
 ):
-    result = latents.clone()
+    # 检查 管道配置文件是否为文件
+    if not os.path.isfile(pipeline_config):
+        raise ValueError(f"Pipeline config file {pipeline_config} does not exist")
+    with open(pipeline_config, "r") as f:
+        pipeline_config = yaml.safe_load(f)
+        logger.debug(f"✅配置文件存在: {pipeline_config}")
 
-    for i in range(latents.size(0)):
-        for c in range(latents.size(1)):
-            r_sd, r_mean = torch.std_mean(
-                reference_latents[i, c], dim=None
-            )  # index by original dim order
-            i_sd, i_mean = torch.std_mean(result[i, c], dim=None)
+    # 修改：配置优先从外部传入，没有再从配置文件获取
+    guidance_scale = kwargs.get("guidance_scale") or pipeline_config.get("guidance_scale", 8)
+    stg_scale = kwargs.get("stg_scale") or pipeline_config.get("stg_scale", 7.5)
+    num_inference_steps = kwargs.get("num_inference_steps") or pipeline_config.get("num_inference_steps", 45)
+    decode_timestep = kwargs.get("decode_timestep") or pipeline_config.get("decode_timestep", 0.02)
+    decode_noise_scale = kwargs.get("decode_noise_scale") or pipeline_config.get("decode_noise_scale", 0.01)
+    prompt_enhancement_words_threshold = kwargs.get("prompt_enhancement_words_threshold") or pipeline_config.get("prompt_enhancement_words_threshold", 350)
+                     
+    models_dir = "MODEL_DIR"
 
-            result[i, c] = ((result[i, c] - i_mean) / i_sd) * r_sd + r_mean
-
-    result = torch.lerp(latents, result, factor)
-    logger.debug(f"✅管道文件完整数据: {result}")
-    return result
-
-# 视频生成步骤流程
-class LTXMultiScalePipeline:
-    def _upsample_latents(
-        self, latest_upsampler: LatentUpsampler, latents: torch.Tensor
-    ):
-        assert latents.device == latest_upsampler.device
-
-        latents = un_normalize_latents(
-            latents, self.vae, vae_per_channel_normalize=True
+    ltxv_model_name_or_path = kwargs.get("checkpoint_path") or pipeline_config.get("checkpoint_path") # 修改先从外部传入中获取参数，没有再从配置文件中获取
+    if not os.path.isfile(ltxv_model_name_or_path):
+        ltxv_model_path = hf_hub_download(
+            repo_id="Lightricks/LTX-Video",
+            filename=ltxv_model_name_or_path,
+            local_dir=models_dir,
+            repo_type="model",
         )
-        upsampled_latents = latest_upsampler(latents)
-        upsampled_latents = normalize_latents(
-            upsampled_latents, self.vae, vae_per_channel_normalize=True
+    else:
+        ltxv_model_path = ltxv_model_name_or_path
+        logger.debug(f"✅LTX-Video模型存在: {ltxv_model_path}")
+
+    if kwargs.get("input_image_path", None):             # **kwargs代表关键字参数
+        logger.warning(
+            "Please use conditioning_media_paths instead of input_image_path."
         )
-        return upsampled_latents
+        assert not conditioning_media_paths and not conditioning_start_frames             # 没有条件媒体路径和没有条件开始框架
+        conditioning_media_paths = [kwargs["input_image_path"]]                           # 条件媒体从关键参数中获取图像输入路径
+        conditioning_start_frames = [0]
+        logger.debug(f"✅图像路径存在: {conditioning_media_paths}")
+        logger.debug(f"✅条件框架: {conditioning_start_frames}")
 
-    def __init__(
-        self, video_pipeline: LTXVideoPipeline, latent_upsampler: LatentUpsampler
-    ):
-        self.video_pipeline = video_pipeline
-        self.vae = video_pipeline.vae
-        self.latent_upsampler = latent_upsampler
-
-    def __call__(
-        self,
-        downscale_factor: float,
-        first_pass: dict,
-        second_pass: dict,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
-        original_kwargs = kwargs.copy()
-        original_output_type = kwargs["output_type"]
-        original_width = kwargs["width"]
-        original_height = kwargs["height"]
-
-        x_width = int(kwargs["width"] * downscale_factor)
-        downscaled_width = x_width - (x_width % self.video_pipeline.vae_scale_factor)
-        x_height = int(kwargs["height"] * downscale_factor)
-        downscaled_height = x_height - (x_height % self.video_pipeline.vae_scale_factor)
-        logger.debug(f"✅管道文件获取目标高宽值: 宽{x_width}, 高{x_height}")
-
-        kwargs["output_type"] = "latent"
-        kwargs["width"] = downscaled_width
-        kwargs["height"] = downscaled_height
-        kwargs.update(**first_pass)
-        result = self.video_pipeline(*args, **kwargs)
-        latents = result.images
-
-        upsampled_latents = self._upsample_latents(self.latent_upsampler, latents)
-        upsampled_latents = adain_filter_latent(
-            latents=upsampled_latents, reference_latents=latents
-        )
-
-        kwargs = original_kwargs
-
-        kwargs["latents"] = upsampled_latents
-        kwargs["output_type"] = original_output_type
-        kwargs["width"] = downscaled_width * 2
-        kwargs["height"] = downscaled_height * 2
-        kwargs.update(**second_pass)
-
-        result = self.video_pipeline(*args, **kwargs)
-        if original_output_type != "latent":
-            num_frames = result.images.shape[2]
-            videos = rearrange(result.images, "b c f h w -> (b f) c h w")
-
-            videos = F.interpolate(
-                videos,
-                size=(original_height, original_width),
-                mode="bilinear",
-                align_corners=False,
+    # 验证条件图像参数
+    if conditioning_media_paths:
+        # 使用默认强度 1.0
+        if not conditioning_strengths:
+            conditioning_strengths = [1.0] * len(conditioning_media_paths)
+        if not conditioning_start_frames:
+            raise ValueError(
+                "If `conditioning_media_paths` is provided, "
+                "`conditioning_start_frames` must also be provided"
             )
-            videos = rearrange(videos, "(b f) c h w -> b c f h w", f=num_frames)
-            logger.debug(f"✅管道文件完整数据: {videos}")
-            result.images = videos
+            logger.debug(f"✅图像调节强度: {conditioning_strengths}")
 
-        return result
+        if len(conditioning_media_paths) != len(conditioning_strengths) or len(
+            conditioning_media_paths
+        ) != len(conditioning_start_frames):
+            raise ValueError(
+                "`conditioning_media_paths`, `conditioning_strengths`, "
+                "and `conditioning_start_frames` must have the same length"
+            )
+        if any(s < 0 or s > 1 for s in conditioning_strengths):
+            raise ValueError("All conditioning strengths must be between 0 and 1")
+        if any(f < 0 or f >= num_frames for f in conditioning_start_frames):
+            raise ValueError(
+                f"All conditioning start frames must be between 0 and {num_frames-1}"
+            )
+
+    # 设置随机数种子
+    seed_everething(seed)
+    if offload_to_cpu and not torch.cuda.is_available():       # 如果卸载到CPU且没有"cuda"可用
+        logger.debug("offload_to_cpu 设置为True, 但不会发生卸载， 因为model 已在 CPU上运行.")
+        offload_to_cpu = False                                 # 卸载到cpu为假
+    else:
+        offload_to_cpu = offload_to_cpu and get_total_gpu_memory() < 9        # 卸载到cpu和获取总数gpu内存小于30
+        logger.debug(f"✅显存小于8GB设备运行在cpu: {offload_to_cpu}")
+
+    output_dir = (
+        Path(output_path)
+        if output_path
+        else Path(f"outputs/{datetime.today().strftime('%Y-%m-%d')}")
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # 将维度调整为可初 32 整除，帧数（num_frames ）为 (N * 8 + 1)
+    height_padded = ((height - 1) // 32 + 1) * 32                            # 高度填充
+    width_padded = ((width - 1) // 32 + 1) * 32                              # 度度填充
+    num_frames_padded = ((num_frames - 2) // 8 + 1) * 8 + 1                  # 帖数填充
+
+    padding = calculate_padding(height, width, height_padded, width_padded)
+    logger.debug(f"✅推理文件维度填充调整: {height_padded}x{width_padded}x{num_frames_padded}")
+    logger.warning(f"警告填充尺寸: {height_padded}x{width_padded}x{num_frames_padded}")
+
+    # 提示词增强阀值
+    prompt_enhancement_words_threshold = pipeline_config[
+        "prompt_enhancement_words_threshold"
+    ]
+
+    prompt_word_count = len(prompt.split())
+    enhance_prompt = (
+        prompt_enhancement_words_threshold > 0
+        and prompt_word_count < prompt_enhancement_words_threshold
+    )
+    logger.debug(f"✅推理文件增强提示词: {enhance_prompt}")
+
+    if prompt_enhancement_words_threshold > 0 and not enhance_prompt:
+        logger.info(
+            f"Prompt has {prompt_word_count} words, which exceeds the threshold of {prompt_enhancement_words_threshold}. Prompt enhancement disabled."
+        )
+
+    precision = pipeline_config["precision"]                                                       # 获取精度
+
+    # 修改：文本编码器优先从外部传入中获取，获取不成功再从配置文件中获取
+    text_encoder_model_name_or_path = (
+       kwargs.get("text_encoder_model_name_or_path")
+       or pipeline_config.get("text_encoder_model_name_or_path")
+    )
+
+    sampler = pipeline_config["sampler"]                                                           # 从配置文件中获取采样器
+
+    # 修改：图像增强模型优先从外部传入获取，没有再从配置文件获取
+    prompt_enhancer_image_caption_model_name_or_path = (
+        kwargs.get("prompt_enhancer_image_caption_model_name_or_path")
+        or pipeline_config.get("prompt_enhancer_image_caption_model_name_or_path")
+    )
+
+    # 修改：文本增强模型优先从外部传入获取，没有再从配置文件中获取
+    prompt_enhancer_llm_model_name_or_path = (
+        kwargs.get("prompt_enhancer_llm_model_name_or_path")
+        or pipeline_config.get("prompt_enhancer_llm_model_name_or_path")
+    )
+
+    # 管道等于视频生成管道构建管道字典
+    pipeline = create_ltx_video_pipeline(
+        ckpt_path=ltxv_model_path,
+        precision=precision,
+        text_encoder_model_name_or_path=text_encoder_model_name_or_path,              # 文本编码器模型
+        sampler=sampler,
+        device=kwargs.get("device", get_device()),  # 从关键参数中获取设备,参数中没有设备指定
+        enhance_prompt=enhance_prompt,
+        prompt_enhancer_image_caption_model_name_or_path=prompt_enhancer_image_caption_model_name_or_path,
+        prompt_enhancer_llm_model_name_or_path=prompt_enhancer_llm_model_name_or_path,
+    )
+    logger.debug(f"✅推理文件视频生成管道字典设备：{device}")
+
+    pipeline_type = kwargs.get("pipeline_type") or pipeline_config.get("pipeline_type")
+    if pipeline_type == "multi-scale":
+        spatial_upscaler_model_path = kwargs.get("spatial_upscaler_model_path") or pipeline_config.get("spatial_upscaler_model_path")
+        if not spatial_upscaler_model_path:
+            raise ValueError(
+                "spatial upscaler model path is missing from kwargs or pipeline config file and is required for multi-scale rendering"
+            )
+        latent_upsampler = create_latent_upsampler(spatial_upscaler_model_path, pipeline.device)
+        logger.debug(f"✅空间上采样模型存在：{latent_upsampler}")
+        
+        pipeline = LTXMultiScalePipeline(pipeline, latent_upsampler=latent_upsampler)
+    
+    # 加载图像文件
+    media_item = None
+    if input_media_path:
+        media_item = load_media_file(
+            media_path=input_media_path,
+            height=height,
+            width=width,
+            max_frames=num_frames_padded,
+            padding=padding,
+            device=device or get_device(),
+        )
+    
+    # infer 调用处
+    conditioning_items = (
+        prepare_conditioning(
+            conditioning_media_paths=conditioning_media_paths,
+            conditioning_strengths=conditioning_strengths,
+            conditioning_start_frames=conditioning_start_frames,
+            height=height,
+            width=width,
+            num_frames=num_frames,
+            padding=padding,
+            pipeline=pipeline,
+            device=device,
+        )
+        if conditioning_media_paths
+        else None
+    )
+    if conditioning_items:   
+        for idx, item in enumerate(conditioning_items):  
+            logger.debug(f"✅推理: 条件媒体 #{idx} device = {item.media_item.device}, target = {device}")
+
+    # 注意力机制
+    stg_mode = pipeline_config.get("stg_mode", "attention_values")
+    del pipeline_config["stg_mode"]
+    if stg_mode.lower() == "stg_av" or stg_mode.lower() == "attention_values":
+        skip_layer_strategy = SkipLayerStrategy.AttentionValues
+    elif stg_mode.lower() == "stg_as" or stg_mode.lower() == "attention_skip":
+        skip_layer_strategy = SkipLayerStrategy.AttentionSkip
+    elif stg_mode.lower() == "stg_r" or stg_mode.lower() == "residual":
+        skip_layer_strategy = SkipLayerStrategy.Residual
+    elif stg_mode.lower() == "stg_t" or stg_mode.lower() == "transformer_block":
+        skip_layer_strategy = SkipLayerStrategy.TransformerBlock
+    else:
+        raise ValueError(f"Invalid spatiotemporal guidance mode: {stg_mode}")
+        logger.debug(f"✅推理文件时空引导模式: {stg_mode}")
+
+    # 为管道准备输入
+    sample = {
+        "prompt": prompt,
+        "prompt_attention_mask": None,
+        "negative_prompt": negative_prompt,
+        "negative_prompt_attention_mask": None,
+    }
+
+    device = device or get_device()
+    generator = torch.Generator(device=device).manual_seed(seed)
+    logger.debug(f"✅管道获取设备: {device}, 生成器设备获取{generator}")
+
+    # 图像管道
+    images = pipeline(
+        **pipeline_config,
+        skip_layer_strategy=skip_layer_strategy,
+        generator=generator,
+        output_type="pt",
+        callback_on_step_end=None,
+        height=height_padded,
+        width=width_padded,
+        num_frames=num_frames_padded,
+        frame_rate=frame_rate,
+        **sample,
+        media_items=media_item,
+        conditioning_items=conditioning_items,            # 包含CPU张量
+        is_video=True,
+        vae_per_channel_normalize=True,
+        image_cond_noise_scale=image_cond_noise_scale,
+        mixed_precision=(precision == "mixed_precision"),
+        offload_to_cpu=offload_to_cpu,
+        device=device,                                      # cuda:0
+        enhance_prompt=enhance_prompt,
+    ).images
+    logger.debug(f"✅images (from pipeline) device: {images.device if hasattr(images, 'device') else 'Unknown'}")
+
+    # 将填充的图像裁剪为所需的分辨率和帧数
+    (pad_left, pad_right, pad_top, pad_bottom) = padding
+    pad_bottom = -pad_bottom
+    pad_right = -pad_right
+    if pad_bottom == 0:
+        pad_bottom = images.shape[3]
+    if pad_right == 0:
+        pad_right = images.shape[4]
+    images = images[:, :, :num_frames, pad_top:pad_bottom, pad_left:pad_right]
+    logger.debug(f"✅images(after crop) device: {images.device}")
+
+    for i in range(images.shape[0]):
+        # Gathering from B, C, F, H, W to C, F, H, W and then permuting to F, H, W, C
+        video_np = images[i].permute(1, 2, 3, 0).cpu().float().numpy()
+        logger.debug(f"✅video_np生成时原images[i] device: {images[i].device}")
+
+        # 将图像非替范化到 [0, 255] 范围
+        video_np = (video_np * 255).astype(np.uint8)
+        fps = frame_rate
+        height, width = video_np.shape[1:3]
+        # 如果生成单个图像
+        if video_np.shape[0] == 1:
+            output_filename = get_unique_filename(
+                f"image_output_{i}",
+                ".png",
+                prompt=prompt,
+                seed=seed,
+                resolution=(height, width, num_frames),
+                dir=output_dir,
+            )
+            imageio.imwrite(output_filename, video_np[0])
+        else:
+            output_filename = get_unique_filename(
+                f"video_output_{i}",
+                ".mp4",
+                prompt=prompt,
+                seed=seed,
+                resolution=(height, width, num_frames),
+                dir=output_dir,
+            )
+            
+            # 写入视频
+            with imageio.get_writer(output_filename, fps=fps) as video:
+                for frame in video_np:
+                    video.append_data(frame)
+
+        logger.warning(f"Output saved to {output_filename}")
+        logger.debug(f"✅输出文件名称: {output_filename}")
+    logger.debug(
+        f"✅LTXVideoPipeline创建成功，包含子模型: VAE({vae.device}),"
+        f"Transformer({transformer.device}), TextEncoder({text_encoder.device}), Scheduler, Tokenizer等"
+    )
+
+# 准备条件
+def prepare_conditioning(
+    conditioning_media_paths: List[str],
+    conditioning_strengths: List[float],
+    conditioning_start_frames: List[int],
+    height: int,
+    width: int,
+    num_frames: int,
+    padding: tuple[int, int, int, int],
+    pipeline: LTXVideoPipeline,
+    device:str
+) -> Optional[List[ConditioningItem]]:
+    # 条件参数空列表
+    conditioning_items = []
+    for path, strength, start_frame in zip(
+        conditioning_media_paths, conditioning_strengths, conditioning_start_frames
+    ):
+        num_input_frames = orig_num_input_frames = get_media_num_frames(path)
+        if hasattr(pipeline, "trim_conditioning_sequence") and callable(
+            getattr(pipeline, "trim_conditioning_sequence")
+        ):
+            num_input_frames = pipeline.trim_conditioning_sequence(
+                start_frame, orig_num_input_frames, num_frames
+            )
+        if num_input_frames < orig_num_input_frames:
+            logger.warning(
+                f"Trimming conditioning video {path} from {orig_num_input_frames} to {num_input_frames} frames."
+            )
+        
+        # 媒体张量=加载的媒体文件
+        media_tensor = load_media_file(
+            media_path=path,
+            height=height,
+            width=width,
+            max_frames=num_input_frames,
+            padding=padding,
+            just_crop=True,
+            device=device, 
+        )
+        media_tensor = media_tensor.to(device)  # 新增：转到目标设备 
+        logger.debug(f"✅media_tensor(after to {device}) device: {media_tensor.device}")
+  
+        conditioning_items.append(ConditioningItem(media_tensor, start_frame, strength))   # 媒体张量、开始帧、强度
+        logger.debug(f"✅媒体张量已转移到设备: {media_tensor.device}") 
+
+    return conditioning_items
+
+# 获取媒体帧参数
+def get_media_num_frames(media_path: str) -> int:
+    is_video = any(
+        media_path.lower().endswith(ext) for ext in [".mp4", ".avi", ".mov", ".mkv"]
+    )
+    num_frames = 1
+    if is_video:
+        reader = imageio.get_reader(media_path)
+        num_frames = reader.count_frames()
+        reader.close()
+        logger.debug(f"✅媒体帧参数: {media_num_frames}")
+    return num_frames
+
+# 加载媒体文件
+def load_media_file(
+    media_path: str,
+    height: int,
+    width: int,
+    max_frames: int,
+    padding: tuple[int, int, int, int],
+    just_crop: bool = False,
+    device: str = "cpu",   # 新增参数，默认cpu
+) -> torch.Tensor:
+    is_video = any(
+        media_path.lower().endswith(ext) for ext in [".mp4", ".avi", ".mov", ".mkv"]
+    )
+    if is_video:
+        reader = imageio.get_reader(media_path)
+        num_input_frames = min(reader.count_frames(), max_frames)
+
+        # 读取预处理视频中的相关帧.
+        frames = []
+        for i in range(num_input_frames):
+            frame = Image.fromarray(reader.get_data(i))
+            frame_tensor = load_image_to_tensor_with_resize_and_crop(
+                frame, height, width, just_crop=just_crop, device=device
+            )
+            frame_tensor = torch.nn.functional.pad(frame_tensor, padding)
+            frames.append(frame_tensor)
+            logger.debug(f"✅媒体帧预处理张量运行在: {frame_tensor.device}") 
+        reader.close()
+
+        # 沿时间维度堆叠帧
+        media_tensor = torch.cat(frames, dim=2)
+    else:                                                                            # 输入图像
+        media_tensor = load_image_to_tensor_with_resize_and_crop(
+            media_path, height, width, just_crop=just_crop, device=device
+        )
+        logger.debug(f"✅media_tensor(load img) device: {media_tensor.device}")
+
+        media_tensor = torch.nn.functional.pad(media_tensor, padding)
+        logger.debug(f"✅media_tensor(after pad) device: {media_tensor.device}")
+
+        media_tensor = media_tensor.to('cuda:0')
+        logger.debug(f"✅媒体张量运行在: {media_tensor.device }")
+        logger.debug(f"✅media_tensor(final return) device: {media_tensor.device}")
+
+    return media_tensor
+
+if __name__ == "__main__":
+    main()
