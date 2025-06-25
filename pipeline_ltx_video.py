@@ -150,6 +150,7 @@ def retrieve_timesteps(
     else:
         scheduler.set_timesteps(num_inference_steps, device=device, **kwargs)
         timesteps = scheduler.timesteps
+    
 
         if (
             skip_initial_inference_steps < 0
@@ -166,23 +167,20 @@ def retrieve_timesteps(
         ]
         scheduler.set_timesteps(timesteps=timesteps, device=device, **kwargs)
         num_inference_steps = len(timesteps)
+        logger.debug(f"✅推理步骤: {num_inference_steps}")
 
     return timesteps, num_inference_steps
 
 @dataclass
-# 类调节项
 class ConditioningItem:
 
-    # torch.Tensor 是一种包含单一数据类型元素的多维矩阵
     media_item: torch.Tensor
     media_frame_number: int
     conditioning_strength: float
     media_x: Optional[int] = None
     media_y: Optional[int] = None
 
-# 视频生成管道
 class LTXVideoPipeline(DiffusionPipeline):
-    # 再编译
     bad_punct_regex = re.compile(
         r"["
         + "#®•©™&@·º½¾¿¡§~"
@@ -199,7 +197,6 @@ class LTXVideoPipeline(DiffusionPipeline):
         + r"]{1,}"
     )  # noqa
 
-    # 可选组件
     _optional_components = [
         "tokenizer",
         "text_encoder",
@@ -244,8 +241,10 @@ class LTXVideoPipeline(DiffusionPipeline):
             self.vae
         )
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
+        logger.debug(f"✅图像修补器存在: {self.image_processor}")
 
         self.allowed_inference_steps = allowed_inference_steps
+        logger.debug(f"✅限制模型推理时可用的时间步: {self.allowed_inference_steps}")
 
     def mask_text_embeddings(self, emb, mask):
         if emb.shape[0] == 1:
@@ -255,7 +254,6 @@ class LTXVideoPipeline(DiffusionPipeline):
             masked_feature = emb * mask[:, None, :, None]
             return masked_feature, emb.shape[2]
 
-    # 文本编码提示词
     def encode_prompt(
         self,
         prompt: Union[str, List[str]],                                              # 提示词
@@ -267,41 +265,40 @@ class LTXVideoPipeline(DiffusionPipeline):
         negative_prompt_embeds: Optional[torch.FloatTensor] = None,                 # 负面提示词嵌入
         prompt_attention_mask: Optional[torch.FloatTensor] = None,                  # 提示注意掩码
         negative_prompt_attention_mask: Optional[torch.FloatTensor] = None,         # 负面提示注意掩码
-        text_encoder_max_tokens: int = 256,                                         # 文本编码最大令牌
+        text_encoder_max_tokens: int = 256,     # 文本编码最大输入文本长度
         **kwargs,
     ):
-        # 警告信息mask_feature已被弃用，也不影响计算，在1.0.0版本后删除
         if "mask_feature" in kwargs:
             deprecation_message = "The use of `mask_feature` is deprecated. It is no longer used in any computation and that doesn't affect the end results. It will be removed in a future version."
             deprecate("mask_feature", "1.0.0", deprecation_message, standard_warn=False)
 
-        if device is None:                                                  # 如果设备没有指定
-            device = self._execution_device                                 # 将使用self._execution_device指定的设备
-            logger.debug(f"✅管道执行设备: {device}")
+        if device is None:
+            device = self._execution_device
 
-        if prompt is not None and isinstance(prompt, str):                  # 如果提示词没有和is实例（提示词, 字符串）
+        if prompt is not None and isinstance(prompt, str):
             batch_size = 1
-        elif prompt is not None and isinstance(prompt, list):                # 如果没有提示词和实例（提示词, 列表）
+        elif prompt is not None and isinstance(prompt, list):
             batch_size = len(prompt)
         else:
             batch_size = prompt_embeds.shape[0]
-            logger.debug(f"✅提示词: {batch_size}") 
 
         # 文本序列的最大长度
         max_length = (
             text_encoder_max_tokens  # TPU 仅支持 128的倍数长度
         )
-        if prompt_embeds is None:                                               # 如果没有提示词嵌入
+        logger.debug(f"✅文本编码序列的最大长度: {max_length}")
+        if prompt_embeds is None: 
             assert (
                 self.text_encoder is not None
             ), "You should provide either prompt_embeds or self.text_encoder should not be None,"
             text_enc_device = next(self.text_encoder.parameters()).device
-            prompt = self._text_preprocessing(prompt)                            # 提示词文本预处理
+            logger.debug(f"✅文本编码运行设备: {device}")
+            prompt = self._text_preprocessing(prompt)
             text_inputs = self.tokenizer(
                 prompt,
-                padding="max_length",                                            # 填充为最大序列长度
+                padding="max_length", 
                 max_length=max_length,
-                truncation=True,                                                 # 截断为真
+                truncation=True, 
                 add_special_tokens=True,
                 return_tensors="pt",
             )
@@ -316,45 +313,40 @@ class LTXVideoPipeline(DiffusionPipeline):
                 removed_text = self.tokenizer.batch_decode(
                     untruncated_ids[:, max_length - 1 : -1]
                 )
-
-                logger.debug(
+                logger.warning(
                     "The following part of your input was truncated because CLIP can only handle sequences up to"
                     f" {max_length} tokens: {removed_text}"
                 )
-                logger.debug(f"✅以下部份内容初截断因为CLIP模型最多只能处理: {max_length}个词: {removed_text}")
 
             prompt_attention_mask = text_inputs.attention_mask
             prompt_attention_mask = prompt_attention_mask.to(text_enc_device)
             prompt_attention_mask = prompt_attention_mask.to(device)
+            logger.debug(f"✅提示词注意力掩码转移到设备: {prompt_attention_mask.device}") 
 
             prompt_embeds = self.text_encoder(
                 text_input_ids.to(text_enc_device), attention_mask=prompt_attention_mask
             )
             prompt_embeds = prompt_embeds[0]
-            logger.debug(f"✅prompt_embeds 运行在: {prompt_embeds.device}")
+            logger.debug(f"✅提示词嵌入: {prompt_embeds}")
 
         if self.text_encoder is not None:
             dtype = self.text_encoder.dtype
         elif self.transformer is not None:
-            dtype = self.transformer.dtype
+            dtype = self.transformer.dtype 
         else:
             dtype = None
+        logger.debug(f"✅文本编码器存在使用文本编码器的数据类型: {dtype}") 
 
         # 将提示嵌入转移到设备
         prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
-        logger.debug(f"✅prompt_embeds 转移后运行在: {prompt_embeds.device}")
+        logger.debug(f"✅提示词嵌入转移后运行在: {prompt_embeds.device}")
 
-        # 获取原始嵌入张量的形状信息：原始大小,序列长度,嵌入维度
         bs_embed, seq_len, _ = prompt_embeds.shape
-        # 复制文本嵌入：为每个提示生成多个图像,使用repeat方法沿第二个维度复制张量(0维不变、1维序列维度、2维嵌入维度不变)
         prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
-        # 重塑张量维度以匹配批量处理要求
         prompt_embeds = prompt_embeds.view(
             bs_embed * num_images_per_prompt, seq_len, -1
         )
-        # 同样复制注意力掩码
         prompt_attention_mask = prompt_attention_mask.repeat(1, num_images_per_prompt)
-        # 重塑注意力掩码维度
         prompt_attention_mask = prompt_attention_mask.view(
             bs_embed * num_images_per_prompt, -1
         )
@@ -377,13 +369,14 @@ class LTXVideoPipeline(DiffusionPipeline):
             negative_prompt_attention_mask = negative_prompt_attention_mask.to(
                 text_enc_device
             )
+            logger.debug(f"✅负面提示词嵌入转移到设备: {negative_prompt_attention_mask.device}")
 
             negative_prompt_embeds = self.text_encoder(
                 uncond_input.input_ids.to(text_enc_device),
                 attention_mask=negative_prompt_attention_mask,
             )
             negative_prompt_embeds = negative_prompt_embeds[0]
-            logger.debug(f"✅negative_prompt_embeds 运行在: {negative_prompt_embeds.device}")
+            logger.debug(f"✅负面提示词嵌入: {negative_prompt_embeds}") 
 
         if do_classifier_free_guidance:
             # 使用MPS友好方法为每个提示符的每一代重复无条件嵌入
@@ -392,7 +385,7 @@ class LTXVideoPipeline(DiffusionPipeline):
             negative_prompt_embeds = negative_prompt_embeds.to(
                 dtype=dtype, device=device
             )
-            logger.debug(f"✅negative_prompt_embeds 转移后运行在: {negative_prompt_embeds.device}")
+            logger.debug(f"✅负面提示词嵌入转移后运行在: {negative_prompt_embeds.device}")
 
             negative_prompt_embeds = negative_prompt_embeds.repeat(
                 1, num_images_per_prompt, 1
@@ -491,18 +484,18 @@ class LTXVideoPipeline(DiffusionPipeline):
         negative_prompt_embeds=None,
         prompt_attention_mask=None,
         negative_prompt_attention_mask=None,
-        enhance_prompt=False,
+        enhance_prompt=False, 
     ):
 
-        if height % 8 != 0 or width % 8 != 0: 
+        if height % 8 != 0 or width % 8 != 0:
             raise ValueError(
-                f"`height` and `width` 必须被 8 整除，但他们是 {height} and {width}."
+                f"`height` and `width` have to be divisible by 8 but are {height} and {width}."
             )
 
         if prompt is not None and prompt_embeds is not None:
             raise ValueError(
-                f"无法转发两个 `prompt`: {提示} and `prompt_embeds`: {prompt_embeds}. 请确保"
-                " 只转发其中一个."
+                f"Cannot forward both `prompt`: {prompt} and `prompt_embeds`: {prompt_embeds}. Please make sure to"
+                " only forward one of the two."
             )
         elif prompt is None and prompt_embeds is None:
             raise ValueError(
@@ -567,7 +560,7 @@ class LTXVideoPipeline(DiffusionPipeline):
             ), "Text prompt enhancer model must be initialized if enhance_prompt is True"
             assert (
                 self.prompt_enhancer_llm_tokenizer is not None
-            ), "Text prompt enhancer tokenizer must be initialized if enhance_prompt is True"
+            ), "Text prompt enhancer tokenizer must be initialized if enhance_prompt is True"        
 
     # 文本预处理
     def _text_preprocessing(self, text):
@@ -599,6 +592,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         need_to_noise = (conditioning_mask > 1.0 - eps).unsqueeze(-1)
         noised_latents = init_latents + noise_scale * noise * (t**2)
         latents = torch.where(need_to_noise, noised_latents, latents)
+        logger.debug(f"✅图像去噪潜在: {latents}")
         return latents
 
     def prepare_latents(
@@ -613,9 +607,9 @@ class LTXVideoPipeline(DiffusionPipeline):
         vae_per_channel_normalize: bool = True,
     ):
         if isinstance(generator, list) and len(generator) != latent_shape[0]:
-            logger.debug(
-                f"你传递了一个长度(length) {len(generator)}, 但请求的是有效批处理"
-                f" 大小 {latent_shape[0]}. 确保批次大小与生成器匹配."
+            raise ValueError(
+                f"You have passed a list of generators of length {len(generator)}, but requested an effective batch"
+                f" size of {latent_shape[0]}. Make sure the batch size matches the length of the generators."
             )
 
         # 使用给定的latents 或编码器的媒体项 初始化latent
@@ -629,29 +623,28 @@ class LTXVideoPipeline(DiffusionPipeline):
 
         if media_items is not None:
             media_items = media_items.to(dtype=self.vae.dtype, device=self.vae.device)
-            logger.debug(f"✅prepare_latents: media_items.device = {media_items.device}, vae.device = {self.vae.device}")
             assert media_items.device == self.vae.device, f"Media_items not on vae.device: {media_items.device} vs {self.vae.device}"
+            logger.debug(f"✅prepare_latents: media_items.device = {media_items.device}, vae.device = {self.vae.device}")
 
             latents = vae_encode(
                 media_items.to(dtype=self.vae.dtype, device=self.vae.device),
                 self.vae,
                 vae_per_channel_normalize=vae_per_channel_normalize,
             )
-            logger.debug(f"✅prepare_latents: latents.device = {latents.device}")
-
+            logger.debug(f"✅准备潜在vae设备运行: {latents.device}")
         if latents is not None:
             assert (
                 latents.shape == latent_shape
             ), f"Latents have to be of shape {latent_shape} but are {latents.shape}."
             latents = latents.to(device=device, dtype=dtype)
-            logger.debug(f"✅prepare_latents: latents.to 后运行在: {latents.device}")
+            logger.debug(f"✅准备潜在运行设备: {latents.device}")
 
         b, c, f, h, w = latent_shape
         noise = randn_tensor(
             (b, f * h * w, c), generator=generator, device=device, dtype=dtype
         )
         noise = rearrange(noise, "b (f h w) c -> b c f h w", f=f, h=h, w=w)
-        logger.debug(f"✅噪声张量设备: {noise.device}")
+        logger.debug(f"✅噪声张量运行设备: {noise.device}")
 
         noise = noise * self.scheduler.init_noise_sigma
 
@@ -659,7 +652,6 @@ class LTXVideoPipeline(DiffusionPipeline):
             latents = noise
         else:
             latents = timestep * noise + (1 - timestep) * latents
-            logger.debug(f"✅prepare_latents 最终返回 latents.device = {latents.device}")
 
         return latents
 
@@ -811,10 +803,9 @@ class LTXVideoPipeline(DiffusionPipeline):
             latent_height,
             latent_width,
         )
-        logger.debug(f"✅默认高度与宽度: 高度{latent_height}, 宽度{latent_width}")
+        logger.debug(f"✅默认宽高比: 高度{latent_height}, 宽度{latent_width}")
 
-        # 准备降噪时间步长列表
-
+        # 准备降噪时间步长列表，取加时间步长关键参数
         retrieve_timesteps_kwargs = {}
         if isinstance(self.scheduler, TimestepShifter):
             retrieve_timesteps_kwargs["samples_shape"] = latent_shape
@@ -828,6 +819,7 @@ class LTXVideoPipeline(DiffusionPipeline):
             "media_item or latents should be provided."
         )
 
+        # 时间步长，推理步骤
         timesteps, num_inference_steps = retrieve_timesteps(
             self.scheduler,
             num_inference_steps,
@@ -854,7 +846,6 @@ class LTXVideoPipeline(DiffusionPipeline):
                 guidance_mapping.append(
                     indices[0] if len(indices) > 0 else (len(guidance_timesteps) - 1)
                 )
-                logger.debug(f"✅管道文件时间步长: {indices}")
 
         if not isinstance(guidance_scale, List):
             guidance_scale = [guidance_scale] * len(timesteps)
@@ -974,9 +965,9 @@ class LTXVideoPipeline(DiffusionPipeline):
                 ],
                 dim=0,
             )
-        logger.debug(f"✅文本编码模型输出文本编码内容: {prompt_embeds}")
+        logger.debug(f"✅文本编码模型设备: {prompt_embeds. device}")   # 这里device如未定义就删除
         if negative_prompt_embeds is not None:
-            logger.debug(f"✅负面提示词编码内容: {negative_prompt_embeds}")
+            logger.debug(f"✅负面提示词运行设备: {negative_prompt_embeds. device}")  # 这里如未定义也删除
  
         # 准备初台潜在张量, shape = (b, c, f, h, w),使用提供的介质和调节项准备初始 latent
         latents = self.prepare_latents(
@@ -1077,9 +1068,6 @@ class LTXVideoPipeline(DiffusionPipeline):
 
                 # 预测噪声 model_output
                 with context_manager:
-                    logger.debug(f"✅模型输入设备: {latent_model_input.device}")
-                    logger.debug(f"✅坐标输入设备: {fractional_coords.device}")
-                    logger.debug(f"✅提示词嵌入设备: {prompt_embeds_batch.device}")
                     assert latent_model_input.device == self._execution_device
                     assert fractional_coords.device == self._execution_device
                     assert prompt_embeds_batch.device == self._execution_device
@@ -1148,7 +1136,7 @@ class LTXVideoPipeline(DiffusionPipeline):
                         noise_pred = noise_pred * factor.view(batch_size, 1, 1)
 
                 current_timestep = current_timestep[:1]
-                # 学习 sigma
+                # 学习 sigma公式
                 if (
                     self.transformer.config.out_channels // 2
                     == self.transformer.config.in_channels
@@ -1218,7 +1206,7 @@ class LTXVideoPipeline(DiffusionPipeline):
             )
 
             image = self.image_processor.postprocess(image, output_type=output_type)
-            logger.debug(f"✅视频生成管道生成图像") 
+            logger.debug(f"✅视频生成流程正确完成，请检查生成结果") 
 
         else:
             image = latents
@@ -1588,12 +1576,13 @@ def adain_filter_latent(
     logger.debug(f"✅管道文件完整数据: {result}")
     return result
 
-# 视频生成步骤流程
+# 动态上采样类(latest_upsampler)
 class LTXMultiScalePipeline:
     def _upsample_latents(
         self, latest_upsampler: LatentUpsampler, latents: torch.Tensor
     ):
         assert latents.device == latest_upsampler.device
+        logger.debug(f"✅动态上采样运行设备: {device}")
 
         latents = un_normalize_latents(
             latents, self.vae, vae_per_channel_normalize=True
