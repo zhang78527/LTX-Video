@@ -100,20 +100,13 @@ def load_image_to_tensor_with_resize_and_crop(
     image = cv2.GaussianBlur(image, (3, 3), 0)
     frame_tensor = torch.from_numpy(image).float()
     frame_tensor = frame_tensor.to(device)
-    logger.debug(f"✅frame_tensor(from_numpy) device: {frame_tensor.device}")
+    logger.debug(f"✅图像帧张量转移到设备: {frame_tensor}")
 
+    # 使用crf_compressor.py模块进行视频压缩
     frame_tensor = crf_compressor.compress(frame_tensor / 255.0) * 255.0
-    logger.debug(f"✅frame_tensor(after compress) device: {frame_tensor.device}")
-
     frame_tensor = frame_tensor.permute(2, 0, 1)
-    logger.debug(f"✅frame_tensor(after permute) device: {frame_tensor.device}")
-
     frame_tensor = (frame_tensor / 127.5) - 1.0
-    logger.debug(f"✅frame_tensor(after normalize) device: {frame_tensor.device}")
-
-    result_tensor = frame_tensor.unsqueeze(0).unsqueeze(2)
-    logger.debug(f"✅frame_tensor(final 5D) device: {result_tensor.device}")
-    return result_tensor
+    return frame_tensor.unsqueeze(0).unsqueeze(2)
 
 def calculate_padding(
     source_height: int, source_width: int, target_height: int, target_width: int
@@ -303,7 +296,7 @@ def create_ltx_video_pipeline(
     text_encoder_model_name_or_path: str,   # 文本编码器路径
     sampler: Optional[str] = None,          # 采样、自选（没有）
     device: Optional[str] = None,           # 设备、自选（没有）
-    enhance_prompt: bool = False,
+    enhance_prompt: bool = False,    
     prompt_enhancer_image_caption_model_name_or_path: Optional[str] = None,          # 提示图像增强模型路径
     prompt_enhancer_llm_model_name_or_path: Optional[str] = None,                    # 提示词增强模型路径
 ) -> LTXVideoPipeline:
@@ -316,7 +309,9 @@ def create_ltx_video_pipeline(
         metadata = f.metadata()
         config_str = metadata.get("config")
         configs = json.loads(config_str)
+        logger.debug(f"✅主模型权重配置内容: {configs}")
         allowed_inference_steps = configs.get("allowed_inference_steps", None)
+        logger.debug(f"✅限制模型推理时可用的时间步: {allowed_inference_steps}")
 
     # ====== 修改: 分片加载与低显存适配 ======
     # 自动选择 dtype
@@ -339,20 +334,20 @@ def create_ltx_video_pipeline(
 
     # ===== 关键: from_pretrained 传递分片参数 =====
     try:
-        vae = CausalVideoAutoencoder.from_pretrained(str(ckpt_path), **load_kwargs)                 # 加载自动编码器
-        logger.debug(f"✅VAE模型加载成功")
+        vae = CausalVideoAutoencoder.from_pretrained(ckpt_path)                 # 加载自动编码器
+        logger.debug(f"✅VAE模型加载成功: vae_path = {ckpt_path}")
     except Exception as e:
         logger.error(f"❌VAE模型加载失败：{ckpt_path}, error: {e}")
     try:
-        transformer = Transformer3DModel.from_pretrained(str(ckpt_path), **load_kwargs)             # 加载注意力机制模型transformer（含编码器与解码器）
-        logger.debug(f"✅Transformer模型加载成功")
+        transformer = Transformer3DModel.from_pretrained(ckpt_path)             # 加载注意力机制模型transformer（含编码器与解码器）
+        logger.debug(f"✅Transformer模型加载成功:transformer_path = {ckpt_path}")
     except Exception as e:
         logger.error(f"❌Transformer模型加载失败：{ckpt_path}, error: {e}")
 
     # 如果指定了采样器则使用checkpoint，否则从本地加载采样器
     if sampler == "from_checkpoint" or not sampler:                                            
-        scheduler = RectifiedFlowScheduler.from_pretrained(str(ckpt_path))
-        logger.debug(f"✅主模型采样器Scheduler加载成功: {ckpt_path}")
+        scheduler = RectifiedFlowScheduler.from_pretrained(ckpt_path)
+        logger.debug(f"✅主模型采样器Scheduler加载成功: {scheduler}")
     else:
         scheduler = RectifiedFlowScheduler(
             sampler=("Uniform" if sampler.lower() == "uniform" else "LinearQuadratic")
@@ -445,7 +440,6 @@ def create_ltx_video_pipeline(
 
 def create_latent_upsampler(latent_upsampler_model_path: str, device: str):
     # 动态上采样器：采样器模型路径
-
     latent_upsampler = LatentUpsampler.from_pretrained(latent_upsampler_model_path)
     latent_upsampler.to(device) 
     latent_upsampler.eval()
@@ -479,18 +473,10 @@ def infer(
     with open(pipeline_config, "r") as f:
         pipeline_config = yaml.safe_load(f)
         logger.debug(f"✅配置文件存在: {pipeline_config}")
-
-    # 修改：配置优先从外部传入，没有再从配置文件获取
-    guidance_scale = kwargs.get("guidance_scale") or pipeline_config.get("guidance_scale", 8)
-    stg_scale = kwargs.get("stg_scale") or pipeline_config.get("stg_scale", 7.5)
-    num_inference_steps = kwargs.get("num_inference_steps") or pipeline_config.get("num_inference_steps", 45)
-    decode_timestep = kwargs.get("decode_timestep") or pipeline_config.get("decode_timestep", 0.02)
-    decode_noise_scale = kwargs.get("decode_noise_scale") or pipeline_config.get("decode_noise_scale", 0.01)
-    prompt_enhancement_words_threshold = kwargs.get("prompt_enhancement_words_threshold") or pipeline_config.get("prompt_enhancement_words_threshold", 350)
-                     
+                      
     models_dir = "MODEL_DIR"
 
-    ltxv_model_name_or_path = kwargs.get("checkpoint_path") or pipeline_config.get("checkpoint_path") # 修改先从外部传入中获取参数，没有再从配置文件中获取
+    ltxv_model_name_or_path = pipeline_config["checkpoint_path"]         # 修改先从外部传入中获取参数，没有再从配置文件中获取
     if not os.path.isfile(ltxv_model_name_or_path):
         ltxv_model_path = hf_hub_download(
             repo_id="Lightricks/LTX-Video",
@@ -501,6 +487,23 @@ def infer(
     else:
         ltxv_model_path = ltxv_model_name_or_path
         logger.debug(f"✅LTX-Video模型存在: {ltxv_model_path}")
+
+    # 空间上采样模型路径
+    spatial_upscaler_model_name_or_path = pipeline_config.get(
+        "spatial_upscaler_model_path"
+    )
+    if spatial_upscaler_model_name_or_path and not os.path.isfile(
+        spatial_upscaler_model_name_or_path
+    ):
+        spatial_upscaler_model_path = hf_hub_download(
+            repo_id="Lightricks/LTX-Video",
+            filename=spatial_upscaler_model_name_or_path,
+            local_dir=models_dir,
+            repo_type="model",
+        )
+    else:
+        spatial_upscaler_model_path = spatial_upscaler_model_name_or_path
+        logger.debug(f"✅空间上采样模型路径存在: {spatial_upscaler_model_path}")
 
     if kwargs.get("input_image_path", None):             # **kwargs代表关键字参数
         logger.warning(
@@ -577,30 +580,18 @@ def infer(
 
     if prompt_enhancement_words_threshold > 0 and not enhance_prompt:
         logger.info(
-            f"Prompt has {prompt_word_count} words, which exceeds the threshold of {prompt_enhancement_words_threshold}. Prompt enhancement disabled."
+            f"✅警告:提示词有{prompt_word_count}个, 这起过了配置文件中阀值{prompt_enhancement_words_threshold}.已禁用提示词增强."
         )
 
     precision = pipeline_config["precision"]                                                       # 获取精度
 
     # 修改：文本编码器优先从外部传入中获取，获取不成功再从配置文件中获取
-    text_encoder_model_name_or_path = (
-       kwargs.get("text_encoder_model_name_or_path")
-       or pipeline_config.get("text_encoder_model_name_or_path")
-    )
-
+    text_encoder_model_name_or_path = pipeline_config["text_encoder_model_name_or_path"]
     sampler = pipeline_config["sampler"]                                                           # 从配置文件中获取采样器
-
     # 修改：图像增强模型优先从外部传入获取，没有再从配置文件获取
-    prompt_enhancer_image_caption_model_name_or_path = (
-        kwargs.get("prompt_enhancer_image_caption_model_name_or_path")
-        or pipeline_config.get("prompt_enhancer_image_caption_model_name_or_path")
-    )
-
+    prompt_enhancer_image_caption_model_name_or_path = pipeline_config["prompt_enhancer_image_caption_model_name_or_path"]
     # 修改：文本增强模型优先从外部传入获取，没有再从配置文件中获取
-    prompt_enhancer_llm_model_name_or_path = (
-        kwargs.get("prompt_enhancer_llm_model_name_or_path")
-        or pipeline_config.get("prompt_enhancer_llm_model_name_or_path")
-    )
+    prompt_enhancer_llm_model_name_or_path = pipeline_config["prompt_enhancer_llm_model_name_or_path"]
 
     # 管道等于视频生成管道构建管道字典
     pipeline = create_ltx_video_pipeline(
@@ -613,8 +604,8 @@ def infer(
         prompt_enhancer_image_caption_model_name_or_path=prompt_enhancer_image_caption_model_name_or_path,
         prompt_enhancer_llm_model_name_or_path=prompt_enhancer_llm_model_name_or_path,
     )
-    logger.debug(f"✅推理文件视频生成管道字典设备：{device}")
 
+    # 这里是否修改需进行验证 
     pipeline_type = kwargs.get("pipeline_type") or pipeline_config.get("pipeline_type")
     if pipeline_type == "multi-scale":
         spatial_upscaler_model_path = kwargs.get("spatial_upscaler_model_path") or pipeline_config.get("spatial_upscaler_model_path")
@@ -672,7 +663,7 @@ def infer(
         skip_layer_strategy = SkipLayerStrategy.TransformerBlock
     else:
         raise ValueError(f"Invalid spatiotemporal guidance mode: {stg_mode}")
-        logger.debug(f"✅推理文件时空引导模式: {stg_mode}")
+    logger.debug(f"✅stg_mode注意力机制模式: {stg_mode}")            # 这里待验证
 
     # 为管道准备输入
     sample = {
@@ -692,7 +683,7 @@ def infer(
         skip_layer_strategy=skip_layer_strategy,
         generator=generator,
         output_type="pt",
-        callback_on_step_end=None,
+        callback_on_step_end=None,    # 管道回调函数，该回调函数在每一步结束时执行，并修改管道属性和变量，以供下一步使用
         height=height_padded,
         width=width_padded,
         num_frames=num_frames_padded,
@@ -725,7 +716,6 @@ def infer(
         # Gathering from B, C, F, H, W to C, F, H, W and then permuting to F, H, W, C
         video_np = images[i].permute(1, 2, 3, 0).cpu().float().numpy()
         logger.debug(f"✅video_np生成时原images[i] device: {images[i].device}")
-
         # 将图像非替范化到 [0, 255] 范围
         video_np = (video_np * 255).astype(np.uint8)
         fps = frame_rate
@@ -747,7 +737,7 @@ def infer(
                 ".mp4",
                 prompt=prompt,
                 seed=seed,
-                resolution=(height, width, num_frames),
+                resolution=(height, width, num_frames),    # 分辨率（高，宽，帧率）
                 dir=output_dir,
             )
             
@@ -756,13 +746,8 @@ def infer(
                 for frame in video_np:
                     video.append_data(frame)
 
-        logger.warning(f"Output saved to {output_filename}")
         logger.debug(f"✅输出文件名称: {output_filename}")
-    logger.debug(
-        f"✅LTXVideoPipeline创建成功，包含子模型: VAE({vae.device}),"
-        f"Transformer({transformer.device}), TextEncoder({text_encoder.device}), Scheduler, Tokenizer等"
-    )
-
+  
 # 准备条件
 def prepare_conditioning(
     conditioning_media_paths: List[str],
