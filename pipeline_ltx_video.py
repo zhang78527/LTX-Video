@@ -920,6 +920,22 @@ class LTXVideoPipeline(DiffusionPipeline):
             # 添加日志记录增强后的提示词
             logger.debug(f"✅增强后的提示词: {prompt}")
 
+            # --- 用完prompt增强相关模型后立即卸载 ---
+            if hasattr(self, "prompt_enhancer_image_caption_model") and self.prompt_enhancer_image_caption_model is not None:
+                del self.prompt_enhancer_image_caption_model
+                self.prompt_enhancer_image_caption_model = None
+            if hasattr(self, "prompt_enhancer_image_caption_processor"):
+                self.prompt_enhancer_image_caption_processor = None
+            if hasattr(self, "prompt_enhancer_llm_model") and self.prompt_enhancer_llm_model is not None:
+                del self.prompt_enhancer_llm_model
+                self.prompt_enhancer_llm_model = None
+            if hasattr(self, "prompt_enhancer_llm_tokenizer"):
+                self.prompt_enhancer_llm_tokenizer = None
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            # --- prompt增强相关模型卸载结束 ---
+
         # 3. 对输入的提示进行编码
         if self.text_encoder is not None:
             self.text_encoder = self.text_encoder.to(self._execution_device)
@@ -941,6 +957,17 @@ class LTXVideoPipeline(DiffusionPipeline):
             negative_prompt_attention_mask=negative_prompt_attention_mask,
             text_encoder_max_tokens=text_encoder_max_tokens,
         )
+
+        # --- 用完文本编码相关模型后立即卸载 ---
+        if hasattr(self, "text_encoder") and self.text_encoder is not None:
+            del self.text_encoder
+            self.text_encoder = None
+        if hasattr(self, "tokenizer"):
+            self.tokenizer = None
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        # --- 文本编码相关模型卸载完成 ---
 
         if offload_to_cpu and self.text_encoder is not None:
             self.text_encoder = self.text_encoder.cpu()
@@ -1206,7 +1233,7 @@ class LTXVideoPipeline(DiffusionPipeline):
             )
 
             image = self.image_processor.postprocess(image, output_type=output_type)
-            logger.debug(f"✅视频生成流程正确完成，请检查生成结果") 
+            logger.debug(f"✅视频生成流程正确完成，请检查生成结果: {image}") 
 
         else:
             image = latents
@@ -1557,6 +1584,27 @@ class LTXVideoPipeline(DiffusionPipeline):
         logger.debug(f"✅管道文件完整数据: {num_frames}")
         return num_frames
 
+    def maybe_free_model_hooks(self):
+        """卸载模型"""
+        if hasattr(self, "text_encoder") and self.text_encoder is not None:
+            del self.text_encoder
+            self.text_encoder = None
+            logger.debug(f"卸载模型 {text_encoder}成功")
+        if hasattr(self, "tokenizer"):
+            self.tokenizer = None
+        if hasattr(self, "prompt_enhancer_llm_model") and self.prompt_enhancer_llm_model is not None:
+            del self.prompt_enhancer_llm_model
+            self.prompt_enhancer_llm_model = None
+        if hasattr(self, "prompt_enhancer_llm_tokenizer"):
+            self.prompt_enhancer_llm_tokenizer = None
+        if hasattr(self, "prompt_enhancer_image_caption_model") and self.prompt_enhancer_image_caption_model is not None:
+            del self.prompt_enhancer_image_caption_model
+            self.prompt_enhancer_image_caption_model = None
+        if hasattr(self, "prompt_enhancer_image_caption_processor"):
+            self.prompt_enhancer_image_caption_processor = None
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 def adain_filter_latent(
     latents: torch.Tensor, reference_latents: torch.Tensor, factor=1.0
