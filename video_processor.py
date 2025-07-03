@@ -21,6 +21,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root / "models/LTX-Video"))
 from safetensors.torch import load_file
 from inference import infer, create_ltx_video_pipeline
+from inference import InferenceModule
 from ltx_video.utils.skip_layer_strategy import SkipLayerStrategy
 
 from src.gui.data_manager import DataManager, MessageTypes
@@ -40,7 +41,9 @@ class VideoProcessor:
         self._init_paths()
         self._setup_data_manager()
         self._load_models()
-        logger.info("文生视频初始化完成")
+        # 初始化子模块
+        self._init_inference_module()
+        logger.info(f"✅文生视频初始化完成")
       
     def _init_paths(self):
         """初始化路径"""
@@ -58,18 +61,17 @@ class VideoProcessor:
         self.prompt_enhancement_words = self.project_root / "models" / "Llama-3.2-1B-Instruct" / "intree"
         self.zh_en = self.project_root / "models" / "opus-mt-zh-en"
         self.spatial_upscaler_model_path = self.project_root / "models" / "ltxv-spatial-upscaler-0.9.7.safetensors"
-
-        self.inference_path = self.project_root / "models " / "LTX-Video"/ "inference.py"                            
-        self.pipeline_type = self.project_root / "models" / "LTX-Video" / "ltx_video\pipelines"/ "pipeline_ltx_video.py" 
-        self.pipeline_config = self.project_root / "models" / "LTX-Video" / "configs" / "ltxv-2b-0.9.5.yaml"
-        if not os.path.isfile(self.pipeline_config):
-            raise RuntimeError(f"pipeline_config 配置文件不存在: {self.pipeline_config}")        
+        self.pretrained_model_path = self.project_root / "models" / "LTX-Video" / "ltx_video" / "models"
         logger.debug(f"文生视频权重文件存在: {self.checkpoint_path.exists()}") 
         logger.debug(f"文本编码模型存在: {self.text_encoder_model.exists()}")
         logger.debug(f"图像转文本模型存在: {self.image_caption_model.exists()}")
         logger.debug(f"提示词增强模型存在: {self.prompt_enhancement_words.exists()}")
         logger.debug(f"中英文翻译模型存在: {self.zh_en.exists()}")
+        logger.debug(f"3D模型存在: {self.pretrained_model_path.exists()}")
 
+        self.inference_path = self.project_root / "models " / "LTX-Video"/ "inference.py"                            
+        self.pipeline_type = self.project_root / "models" / "LTX-Video" / "ltx_video\pipelines"/ "pipeline_ltx_video.py" 
+       
     def _setup_data_manager(self):
         """配置数据管理器"""
         self.data_manager = DataManager()
@@ -129,11 +131,25 @@ class VideoProcessor:
             "original_command": original_command
         })
 
+    def _init_inference_module(self):
+        """初始化推理模块"""
+        try:
+            self.inference_module = InferenceModule(
+                config=self.config,
+                data_manager=self.data_manager,
+                project_root=self.project_root,
+                device=self.device
+            )
+            logger.info(f"✅推理模块初始化成功")
+        except Exception as e:
+            logger.error(f"推理模块初始化失败: {str(e)}")
+            self.inference_module = None
+
     def _execute_generation(self, task_data):
         """执行生成任务"""
         try:
             # 发送进度给文件生成窗口激活进度条
-            self._update_status(20, "开始执行生成任务")
+
             if not task_data:
                 raise ValueError("未接收到有效指令")
 
@@ -148,8 +164,6 @@ class VideoProcessor:
                 )
 
             # 发送进度更新
-            self._update_status(80, "生成任务即将完成")
-            self._update_status(90, "生成任务完成")
        
             # 发送生成任务结果及文件存储路径给生成窗口
             self.data_manager.send_message(MessageTypes.OUTPUT_PATH, {
@@ -159,7 +173,6 @@ class VideoProcessor:
                 "output_paths": result
             })
 
-            self._update_status(100, "生成任务完成")
         except Exception as e:
             logger.error(f"执行生成任务失败: {str(e)}")
             self.data_manager.send_message(MessageTypes.TASK_RESULT, {
@@ -171,22 +184,29 @@ class VideoProcessor:
     def _process_video_generation(self, materials, command, original_command):
         """处理视频生成的核心逻辑"""
         try:
-            self._update_status(10, "开始处理视频生成请求")
-            
             patch_size = 32
 
             original_prompt = original_command            # 获取原始提示词
             logger.debug(f"✅获取原始提示词成功: {original_prompt}")
 
-            # 将文本转换为模型输入格式
-            inputs = self.tokenizer(original_prompt, return_tensors="pt", padding=True, truncation=True)
+            # 判断 original_prompt 是否为中文
+            def contains_chinese(text):
+                for ch in text:
+                    if '\u4e00' <= ch <= '\u9fff':
+                        return True
+                return False
 
-            # 生成翻译
-            translated = self.model.generate(**inputs)
-
-            # 将生成的 ID 序列转换为文本
-            prompt = self.tokenizer.decode(translated[0], skip_special_tokens=True)
-            logger.debug(f"✅获取翻译后的提示词成功: {prompt}")
+            if contains_chinese(original_prompt):
+                # 将文本转换为模型输入格式
+                inputs = self.tokenizer(original_prompt, return_tensors="pt", padding=True, truncation=True)
+                # 生成翻译
+                translated = self.model.generate(**inputs)
+                # 将生成的 ID 序列转换为文本
+                prompt = self.tokenizer.decode(translated[0], skip_special_tokens=True)
+                logger.debug(f"✅获取翻译后的提示词成功: {prompt}")
+            else:
+                prompt = original_prompt
+                logger.debug("✅原始提示词为英文，无需翻译")
 
             # 卸载所有模型
             self.maybe_free_model_hooks()
@@ -221,55 +241,52 @@ class VideoProcessor:
                 num_frames = min(num_frames, 64)
                 logger.info(f"检测到8G显卡，降级分辨率/帧数：height={height},width={width},num_frames={num_frames}")
 
-      
-            # 4. 统一padded尺寸，保证为patch_size整数倍
+            # 统一padded尺寸，保证为patch_size整数倍
             height_padded = ((height - 1) // patch_size + 1) * patch_size
             width_padded = ((width - 1) // patch_size + 1) * patch_size
 
-            # 5. num_frames 按原有逻辑补齐
+            # num_frames 按原有逻辑补齐
             num_frames_padded = ((num_frames - 2) // 8 + 1) * 8 + 1
+            device=self.device
+            logger.info(f"✅ 视频生成模块获取设备: {device}")
 
-            # 2. 组装 params
+            # 1.组装 params
             params = {
-                "output_path": str(self.output_dir),
-                "seed": 42,                                           # 种子
-                "pipeline_config": str(self.pipeline_config),
-                "num_inference_steps": 40,                            # 去噪步数,值越大生成质量可能越高,但耗时增加,50 次去噪步骤,足以得到一个高质量图像
-                "image_cond_noise_scale": 0.10,                       # 条件图像的噪声缩放因子，控制条件图像对生成结果的影响强度。
+                "output_path": str(self.output_dir),                   # 文件输出路径
                 "height": height_padded,
                 "width":  width_padded,
                 "num_frames": num_frames_padded,                       # 视频总帧数（若生成视频）从数据管理器传递过来的参数中自动获取
                 "frame_rate": frame_rate,                              #  视频帧率帧数为8的倍数加1，自动从数据管理器传递过来的参数中获取
-                "prompt": prompt,
-                "negative_prompt": "distorted, deformed, blurry, low quality, mutated hands, extra limbs, disfigured, worst quality, jittery, flickering, inconsistent motion, watermark, text",
-                "offload_to_cpu": (gpu_mem_gb > 0 and gpu_mem_gb <= 8), # 8G显卡强制CPU卸载
-                "negative_prompt": negative_prompt
-
-            }
-
-            config = {
-                "pipeline_type": "base",
+                "prompt": prompt,                                      # 提示词
+                "negative_prompt": "worst quality, inconsistent motion, blurry, jittery, distorted",
+                "pipeline_type": "multi-scale",          # "multi-scale", "base"
+                "seed": 42,                                           # 种子
                 "num_images_per_prompt": 1,       # 每个提示词生成的图像/视频数量（此处为 1 个，可能用于测试或单样本生成）
-                "guidance_scale": 8,            # 控制文本提示词对生成结果的影响强度,值越大图像质量越好,7和8.5之间通常是稳定扩散的好选择
-                "stg_scale": 8,                   # 提示词引导系数。参数并不是越大越好，值为3时，与提示词相近，合理的值（7-10）
-                "stg_rescale": 0.7,               # 缩放
-                "stg_mode": "attention_values",   # 模式 注意力机制
-                "stg_skip_layers": "1,2,3",       # 跳过某些网络层的索引（如跳过第 1、2、3 层，可能用于简化计算或定制生成效果）
-                "precision": "float16",
+                "num_inference_steps": 15,        # 去噪步数,值越大生成质量可能越高,但耗时增加,40-50 次去噪步骤,足以得到一个高质量图像
+                "stg_mode": "transformer_block",   # 模式 注意力机制选项（"attention_values", "attention_skip", "residual", "transformer_block"）
                 "decode_timestep": 0.03,          # 解码过程的时间步长（控制生成过程的细粒度，值越小生成越精细但耗时增加）
-                "decode_noise_scale": 0.015,      # 解码阶段的噪声强度（影响生成结果的多样性与清晰度）。
-                "device": self.device,
+                "decode_noise_scale": [0.015],      # 解码阶段的噪声强度（影响生成结果的多样性与清晰度）
+                "stg_rescale": 0.7, 
+                "image_cond_noise_scale": 0.10,                           # 条件图像的噪声缩放因子，控制条件图像对生成结果的影响强度。
+                "prompt_enhancement_words_threshold": 120,                # 提示词限制
+                "offload_to_cpu": (gpu_mem_gb > 0 and gpu_mem_gb <= 8),   # 8G显卡强制CPU卸载
+                "precision": "bfloat16",
+                "device": device,
+                "downscale_factor": 0.6666666,
+                "stochastic_sampling": False,   # 启用随机采样：True生成结果随机性，但不可复现，False生成结果确定，适合测试可重复性
+            }
+            # 2.组装配置
+            config = {
                 "checkpoint_path": str(self.checkpoint_path),                                       # 主模型权重路径
+                "pretrained_model_path": str(self.pretrained_model_path),
                 "text_encoder_model_name_or_path": str(self.text_encoder_model),                    # 文本编码模型路径
                 "prompt_enhancer_image_caption_model_name_or_path": str(self.image_caption_model),  # 图像增强模型路径
                 "prompt_enhancer_llm_model_name_or_path": str(self.prompt_enhancement_words),       # 提示词增强模型路径
-                "spatial_upscaler_model_path": str(self.spatial_upscaler_model_path),
-                "prompt_enhancement_words_threshold": 120,                                                    # 提示词限制
-                "stochastic_sampling": False,
-                "sampler": "from_checkpoint"
-            }
+                "spatial_upscaler_model_path": str(self.spatial_upscaler_model_path),               # 空间采样模型路径
+                "sampler": "uniformt",        # 选项: "uniform", "linear-quadratic", "from_checkpoint"
+            }       # "uniform"：均匀采样器;"linear-quadratic"：使用线性二次采样器;"from_checkpoint"：从检查点加载调度器配置，而不是重新创建
 
-            # 4. 组装 conditioning_params
+            # 3.组装 conditioning_params
             conditioning_params = {}
             if materials:
                 # 只用第一个素材作为输入（如流程有多素材合成可扩展此处）
@@ -277,30 +294,52 @@ class VideoProcessor:
                 conditioning_params["conditioning_media_paths"] = [input_media_path]
                 conditioning_params["conditioning_start_frames"] = [0]
                 conditioning_params["conditioning_strengths"] = [1.0]
+            # 多阶段的生成过程，参数随时间变化
+            first_pass = {
+                "guidance_scale": [1, 1, 6, 8, 6, 1, 1],  # 控制文本提示词对生成结果的影响强度,值越大图像质量越好,3-3.5
+                "stg_scale": [0, 0, 4, 4, 4, 2, 1],       # 提示词引导系数。参数并不是越大越好，值为3时，与提示词相近，合理的值（3-5）
+                "rescaling_scale": [1, 1, 0.5, 0.5, 1, 1, 1],# 缩放0.5-0.7
+                "guidance_timesteps": [1.0, 0.996,  0.9933, 0.9850, 0.9767, 0.9008, 0.6180],# 时间步通常是从噪声水平高到低（从1到0）。
+                "skip_block_list": [[], [11, 25], [22], [27], [27], [27], [27]], # 指定在每个阶段跳过哪些网络块
+                "skip_final_inference_steps": 0,      # 跳过最后的推理步骤
+                "cfg_star_rescale": True,             # 是否使用CFG*重缩放技术
+            }
+            # 单阶段的精炼过程，使用固定的参数
+            second_pass = {
+                "guidance_scale": [4],              # 控制文本提示词对生成结果的影响强度,值越大图像质量越好,3-3.5
+                "stg_scale": [4],                   # 提示词引导系数。参数并不是越大越好，值为3时，与提示词相近，合理的值（3-5）
+                "rescaling_scale": [1],           # 缩放0.5-0.7
+                "guidance_timesteps": [1.0],        # 时间步通常是从噪声水平高到低（从1到0）。
+                "skip_block_list": [0],             # 指定在每个阶段跳过哪些网络块
+                "skip_initial_inference_steps": 0,  # 跳过初始的推理步骤
+                "cfg_star_rescale": True,           # 是否使用CFG*重缩放技术
+            }
 
-            # 5. 合并所有参数并推理
-            all_params = {**conditioning_params, **params, **config}
-            # 关键：强制开启增强
-            all_params['enhance_prompt'] = True
+            # 4.组装inference_data
+            inference_data = {
+                "params": params,
+                "config": config,
+                "conditioning_params": conditioning_params,
+                "first_pass": first_pass,
+                "second_pass": second_pass,
+            }
 
-            # 8G显卡强制CPU卸载
-            if gpu_mem_gb > 0 and gpu_mem_gb <= 8:
-                all_params['offload_to_cpu'] = True
-
-            self._update_status(20, f"参数准备完成，开始合成(height={512},width={768},num_frames={num_frames},offload={all_params['offload_to_cpu']})")
-
-            infer(**all_params)
-            self._update_status(100, "视频生成完成")
+            self.data_manager.send_message(           
+                MessageTypes.INFERENCE_DATA,             
+                {
+                    "source": "generate_video",  # 来源标识
+                    "data": inference_data
+                }
+            )
+            logger.info(f"✅ 发送推理参数至推理模块: {inference_data}")
 
             video_files = glob.glob(str(self.output_dir / "video_output_*.mp4"))
             if not video_files:
                 raise RuntimeError("未找到生成的视频文件")
             latest_video = max(video_files, key=os.path.getctime)
             return [latest_video]
-
         except Exception as e:
             logger.error(f"视频生成任务失败: {str(e)}")
-            self._update_status(-1, f"视频生成任务失败: {str(e)}")
             raise
 
     def _save_video(self, frames: List[Image.Image], fps: int) -> Path:
