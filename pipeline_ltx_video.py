@@ -2,6 +2,7 @@ import copy
 import inspect
 import math
 import re
+import gc
 import logging
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -727,7 +728,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         skip_block_list: Optional[Union[List[List[int]], List[int]]] = None,
         stg_scale: Union[float, List[float]] = 1.0,
         rescaling_scale: Union[float, List[float]] = 0.7,
-        guidance_timesteps: Optional[List[int]] = None,
+        guidance_timesteps: Optional[List[float]] = None,
         num_images_per_prompt: Optional[int] = 1,
         eta: float = 0.0,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
@@ -740,7 +741,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         return_dict: bool = True,
         callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         conditioning_items: Optional[List[ConditioningItem]] = None,
-        decode_timestep: Union[List[float], float] = 0.0,
+        decode_timestep: Union[List[float], float] = 0.0,  # 可为列表小数，也可为单个小数解码时间步长
         decode_noise_scale: Optional[List[float]] = None,
         mixed_precision: bool = False,
         offload_to_cpu: bool = False,
@@ -1233,7 +1234,7 @@ class LTXVideoPipeline(DiffusionPipeline):
             )
 
             image = self.image_processor.postprocess(image, output_type=output_type)
-            logger.debug(f"✅视频生成流程正确完成，请检查生成结果: {image}") 
+            logger.debug(f"✅视频生成流程正确完成，请检查生成结果") 
 
         else:
             image = latents
@@ -1621,7 +1622,7 @@ def adain_filter_latent(
             result[i, c] = ((result[i, c] - i_mean) / i_sd) * r_sd + r_mean
 
     result = torch.lerp(latents, result, factor)
-    logger.debug(f"✅管道文件完整数据: {result}")
+    logger.debug(f"✅管道文件获取完整数据")
     return result
 
 # 动态上采样类(latest_upsampler)
@@ -1630,7 +1631,7 @@ class LTXMultiScalePipeline:
         self, latest_upsampler: LatentUpsampler, latents: torch.Tensor
     ):
         assert latents.device == latest_upsampler.device
-        logger.debug(f"✅动态上采样运行设备: {device}")
+        logger.debug(f"✅动态上采样运行设备: {latest_upsampler.device}")
 
         latents = un_normalize_latents(
             latents, self.vae, vae_per_channel_normalize=True
@@ -1642,20 +1643,30 @@ class LTXMultiScalePipeline:
         return upsampled_latents
 
     def __init__(
-        self, video_pipeline: LTXVideoPipeline, latent_upsampler: LatentUpsampler
+        self,
+        video_pipeline: LTXVideoPipeline,
+        latent_upsampler: LatentUpsampler,
+        first_pass: dict,
+        second_pass: dict,
+        downscale_factor: float,
     ):
         self.video_pipeline = video_pipeline
         self.vae = video_pipeline.vae
         self.latent_upsampler = latent_upsampler
+        # 保存传入的参数
+        self.first_pass = first_pass
+        self.second_pass = second_pass
+        self.downscale_factor = downscale_factor
 
     def __call__(
         self,
-        downscale_factor: float,
-        first_pass: dict,
-        second_pass: dict,
         *args: Any,
         **kwargs: Any,
     ) -> Any:
+        downscale_factor = self.downscale_factor
+        first_pass = self.first_pass
+        second_pass = self.second_pass
+
         original_kwargs = kwargs.copy()
         original_output_type = kwargs["output_type"]
         original_width = kwargs["width"]
