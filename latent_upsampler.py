@@ -184,7 +184,7 @@ class LatentUpsampler(ModelMixin, ConfigMixin):
             ".safetensors"
         ):
             state_dict = {}
-            with safe_open(pretrained_model_path, framework="pt", device="device") as f:
+            with safe_open(pretrained_model_path, framework="pt", device="cpu") as f:
                 metadata = f.metadata()
                 for k in f.keys():
                     state_dict[k] = f.get_tensor(k)
@@ -197,9 +197,9 @@ class LatentUpsampler(ModelMixin, ConfigMixin):
 
 if __name__ == "__main__":
     latent_upsampler = LatentUpsampler(num_blocks_per_stage=4, dims=3)
-    print(latent_upsampler)
+    logger.debug(f"✅latent_upsampler")
     total_params = sum(p.numel() for p in latent_upsampler.parameters())
-    print(f"Total number of parameters: {total_params:,}")
+    logger.debug(f"✅Total number of parameters: {total_params:,}")
     latent = torch.randn(1, 128, 9, 16, 16)
     upsampled_latent = latent_upsampler(latent)
-    print(f"Upsampled latent shape: {upsampled_latent.shape}")
+    logger.debug(f"✅Upsampled latent shape: {upsampled_latent.shape}")
