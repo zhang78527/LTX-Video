@@ -919,21 +919,6 @@ class LTXVideoPipeline(DiffusionPipeline):
             # 添加日志记录增强后的提示词
             logger.debug(f"✅增强后的提示词: {prompt}")
 
-            # --- 用完prompt增强相关模型后立即卸载 ---
-            if hasattr(self, "prompt_enhancer_image_caption_model") and self.prompt_enhancer_image_caption_model is not None:
-                del self.prompt_enhancer_image_caption_model
-                self.prompt_enhancer_image_caption_model = None
-            if hasattr(self, "prompt_enhancer_image_caption_processor"):
-                self.prompt_enhancer_image_caption_processor = None
-            if hasattr(self, "prompt_enhancer_llm_model") and self.prompt_enhancer_llm_model is not None:
-                del self.prompt_enhancer_llm_model
-                self.prompt_enhancer_llm_model = None
-            if hasattr(self, "prompt_enhancer_llm_tokenizer"):
-                self.prompt_enhancer_llm_tokenizer = None
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            # --- prompt增强相关模型卸载结束 ---
 
         # 3. 对输入的提示进行编码
         if self.text_encoder is not None:
@@ -956,17 +941,6 @@ class LTXVideoPipeline(DiffusionPipeline):
             negative_prompt_attention_mask=negative_prompt_attention_mask,
             text_encoder_max_tokens=text_encoder_max_tokens,
         )
-
-        # --- 用完文本编码相关模型后立即卸载 ---
-        if hasattr(self, "text_encoder") and self.text_encoder is not None:
-            del self.text_encoder
-            self.text_encoder = None
-        if hasattr(self, "tokenizer"):
-            self.tokenizer = None
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        # --- 文本编码相关模型卸载完成 ---
 
         if offload_to_cpu and self.text_encoder is not None:
             self.text_encoder = self.text_encoder.cpu()
@@ -1094,9 +1068,11 @@ class LTXVideoPipeline(DiffusionPipeline):
 
                 # 预测噪声 model_output
                 with context_manager:
+                    latent_model_input = latent_model_input.to(self._execution_device)
                     assert latent_model_input.device == self._execution_device
                     assert fractional_coords.device == self._execution_device
                     assert prompt_embeds_batch.device == self._execution_device
+                    logger.debug(f"✅预测噪声潜在媒体张量运行设备: {latent_model_input.device}, {fractional_coords.device}, {prompt_embeds_batch.device}")
 
                     noise_pred = self.transformer(
                         latent_model_input.to(self.transformer.dtype),
@@ -1588,7 +1564,6 @@ class LTXVideoPipeline(DiffusionPipeline):
         if hasattr(self, "text_encoder") and self.text_encoder is not None:
             del self.text_encoder
             self.text_encoder = None
-            logger.debug(f"卸载模型 {text_encoder}成功")
         if hasattr(self, "tokenizer"):
             self.tokenizer = None
         if hasattr(self, "prompt_enhancer_llm_model") and self.prompt_enhancer_llm_model is not None:
