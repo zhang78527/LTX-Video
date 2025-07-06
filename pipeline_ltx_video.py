@@ -1558,28 +1558,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         num_frames = (num_frames - 1) // scale_factor * scale_factor + 1
         logger.debug(f"✅管道文件完整数据: {num_frames}")
         return num_frames
-
-    def maybe_free_model_hooks(self):
-        """卸载模型"""
-        if hasattr(self, "text_encoder") and self.text_encoder is not None:
-            del self.text_encoder
-            self.text_encoder = None
-        if hasattr(self, "tokenizer"):
-            self.tokenizer = None
-        if hasattr(self, "prompt_enhancer_llm_model") and self.prompt_enhancer_llm_model is not None:
-            del self.prompt_enhancer_llm_model
-            self.prompt_enhancer_llm_model = None
-        if hasattr(self, "prompt_enhancer_llm_tokenizer"):
-            self.prompt_enhancer_llm_tokenizer = None
-        if hasattr(self, "prompt_enhancer_image_caption_model") and self.prompt_enhancer_image_caption_model is not None:
-            del self.prompt_enhancer_image_caption_model
-            self.prompt_enhancer_image_caption_model = None
-        if hasattr(self, "prompt_enhancer_image_caption_processor"):
-            self.prompt_enhancer_image_caption_processor = None
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
+        
 def adain_filter_latent(
     latents: torch.Tensor, reference_latents: torch.Tensor, factor=1.0
 ):
