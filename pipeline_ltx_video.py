@@ -902,12 +902,10 @@ class LTXVideoPipeline(DiffusionPipeline):
                 ]
 
         if enhance_prompt:
-            self.prompt_enhancer_image_caption_model = (
-                self.prompt_enhancer_image_caption_model.to(self._execution_device)
-            )
-            self.prompt_enhancer_llm_model = self.prompt_enhancer_llm_model.to(
-                self._execution_device
-            )
+            if self.prompt_enhancer_image_caption_model is not None:
+                self.prompt_enhancer_image_caption_model = self.prompt_enhancer_image_caption_model.to(self._execution_device)
+            if self.prompt_enhancer_llm_model is not None:  
+                self.prompt_enhancer_llm_model = self.prompt_enhancer_llm_model.to(self._execution_device)
 
             prompt = generate_cinematic_prompt(
                 self.prompt_enhancer_image_caption_model,
