@@ -260,7 +260,6 @@ def create_ltx_video_pipeline(
         metadata = f.metadata()
         config_str = metadata.get("config")
         configs = json.loads(config_str)
-        logger.debug(f"✅主模型权重配置内容")
         allowed_inference_steps = configs.get("allowed_inference_steps", None)
         logger.debug(f"✅限制模型推理时可用的时间步: {allowed_inference_steps}")
 
@@ -294,6 +293,7 @@ def create_ltx_video_pipeline(
     logger.debug(f"✅分词器加载成功: {text_encoder_model_name_or_path}")
 
     transformer = transformer.to(device)      # 将注意力机制模型transformer转移到设备上
+    logger.debug(f"✅将注意力机制模型transformer转移到设备: {transformer.device}")
     vae = vae.to(device)                      # 将自动编码器转移到设备上
     text_encoder = text_encoder.to(device)    # 将文本编码器转移到设备上
 
@@ -364,7 +364,6 @@ def create_ltx_video_pipeline(
     }
 
     pipeline = LTXVideoPipeline(**submodel_dict)      # 管道等于视频生成子模型字典
-    logger.debug(f"✅传输模型配置字典给管道的视频处理流水线类")
     pipeline = pipeline.to(device)                    # 将管道转移到设备上
     return pipeline                                    # 返回管道
 
@@ -373,26 +372,25 @@ def create_latent_upsampler(latent_upsampler_model_path: str, device: str):
     latent_upsampler = LatentUpsampler.from_pretrained(latent_upsampler_model_path)
     latent_upsampler.to(device) 
     latent_upsampler.eval()
-    logger.debug(f"✅潜空间上采样模型加载成功")
     logger.debug(f"✅潜空间上采样模型运行设备: {latent_upsampler.device}")
     return latent_upsampler
 
 # 定义推断,负责调度流程、参数准备、调用 pipeline，以及后处理（如保存输出）
 def infer(
     pipeline_config: str, 
-    output_path: Optional[str] = None,                                        # 输出路径：自选
-    seed: int = 42,                                                    # 种子
-    image_cond_noise_scale: float = 0.0,                                     # 图像条件
-    height: Optional[int] = None,                                            # 图像高：自选
-    width: Optional[int] = None,
-    num_frames: int = 120,
-    frame_rate: float = 24,
-    num_inference_steps: int = 20,
-    stochastic_sampling: bool = False,
-    decode_timestep: Union[List[float], float] = 0.0,
-    decode_noise_scale: Optional[List[float]] = None,
-    num_images_per_prompt: Optional[int] = 1,
-    stg_rescale: float = 0.7,
+    output_path: Optional[str],                                        # 输出路径：自选
+    seed: int,                                                    # 种子
+    image_cond_noise_scale: float,                                     # 图像条件
+    height: Optional[int],                                            # 图像高：自选
+    width: Optional[int],
+    num_frames: int,
+    frame_rate: float,
+    num_inference_steps: int,
+    stochastic_sampling: bool,
+    decode_timestep: Union[List[float], float],
+    decode_noise_scale: Optional[List[float]],
+    num_images_per_prompt: Optional[int],
+    stg_rescale: float,
     prompt: str = "",                                                    # 提示词
     negative_prompt: str = "",                                            # 反向提示词
     offload_to_cpu: bool = False,                                              # 将计算任务转移到cpu：Offload 技术将GPU显存中的权重卸载到CPU内存
@@ -447,7 +445,9 @@ def infer(
     # 设置随机数种子
     seed_everething(seed)
     if offload_to_cpu and not torch.cuda.is_available():       # 如果卸载到CPU且没有"cuda"可用
-        logger.debug("offload_to_cpu 设置为True, 但不会发生卸载， 因为model 已在 CPU上运行.")
+        logger.warning(
+            "offload_to_cpu is set to True, but offloading will not occur since the model is already running on CPU."
+        )
         offload_to_cpu = False                                 # 卸载到cpu为假
     else:
         offload_to_cpu = offload_to_cpu and get_total_gpu_memory() < 30        # 卸载到cpu和获取总数gpu内存小于30
@@ -506,7 +506,7 @@ def infer(
     )
 
     # 从参数中获取管道类型,如果选择多尺度管道"multi-scale",
-    pipeline_type = kwargs.get("pipeline_type")
+    pipeline_type = kwargs.get("pipeline_type", None)
     logger.debug(f"✅获取管道生成类型：{pipeline_type}")
     if pipeline_type == "multi-scale":
         spatial_upscaler_model_path = kwargs.get("spatial_upscaler_model_path")   # 获取空间上采样模型的路径,如果没有提供路径，则报错
@@ -542,11 +542,6 @@ def infer(
             device=device or get_device(),
         )
 
-        # 添加检查点，如还出错则删除
-        if media_item is None:
-            logger.error(f"❌输入媒体文件{input_media_path}加载失败, 中止推理")
-            raise RuntimeError(f"输入媒体文件{input_media_path}加载失败")
-
     # infer 调用处
     conditioning_items = (
         prepare_conditioning(
@@ -563,11 +558,6 @@ def infer(
         if conditioning_media_paths
         else None
     )
-
-    # 添加检查点，如还出错则删除
-    if conditioning_media_paths and conditioning_items is None:
-        logger.error(f"❌所有条件媒体文件加载失败, 中止推理")
-        raise RuntimeError("所有条件媒体文件加载失败")
 
     if conditioning_items:   
         for idx, item in enumerate(conditioning_items):  
@@ -671,7 +661,7 @@ def infer(
                 for frame in video_np:
                     video.append_data(frame)
         logger.debug(f"✅输出文件名称: {output_filename}")
-  
+
 # 负责根据路径、强度、起始帧等，批量调用 ，并生成 ConditioningItem 列表供 pipeline 使用,负责“批量调度+组装”
 def prepare_conditioning(
     conditioning_media_paths: List[str],
@@ -711,20 +701,9 @@ def prepare_conditioning(
             just_crop=True,
             device=device, 
         )
-
-        # 增加检查点，定位错误，如还出错说明错误不在这里，则删除
-        if media_tensor is None:
-            logger.error(f"❌媒体文件{path}加载失败，跳过该条件")
-            continue  # 跳过此项
-
         media_tensor = media_tensor.to(device)  # 新增：转到目标设备 
         conditioning_items.append(ConditioningItem(media_tensor, start_frame, strength))   # 媒体张量、开始帧、强度
         logger.debug(f"✅媒体张量已转移到设备: {media_tensor.device}") 
-
-    # 增加检查点，定位错误，如还出错说明错误不在这里，则删除
-    if not conditioning_items:
-        logger.error(f"❌所有条件媒体文件加载失败，返回None")
-        return None
 
     logger.debug(f"✅获取条件参数: {conditioning_items}")
     return conditioning_items
@@ -766,33 +745,16 @@ def load_media_file(
             frame_tensor = load_image_to_tensor_with_resize_and_crop(
                 frame, height, width, just_crop=just_crop, device=device
             )
-
-            # 增加检查，如还出错则不是这里问题，应删除
-            if frame_tensor is None:
-                logger.error(f"❌帧{media_path}第{i}帧加载失败, 跳过")
-                continue  # 跳过该帧
-
             frame_tensor = torch.nn.functional.pad(frame_tensor, padding)
             frames.append(frame_tensor)
             logger.debug(f"✅媒体帧预处理张量运行在: {frame_tensor.device}") 
         reader.close()
-
-        # 增加检查，如还出错则不是这里问题，应删除
-        if not frames:
-            logger.error(f"❌视频{media_path}全部帧加载失败")
-            return None
 
         media_tensor = torch.cat(frames, dim=2)
     else:                                                                            # 输入图像
         media_tensor = load_image_to_tensor_with_resize_and_crop(
             media_path, height, width, just_crop=just_crop, device=device
         )
-
-        # 增加检查，如还出错则不是这里问题，应删除
-        if media_tensor is None:
-            logger.error(f"❌图像{media_path}加载失败")
-            return None
-
         logger.debug(f"✅media_tensor(load img) device: {media_tensor.device}")
 
         media_tensor = torch.nn.functional.pad(media_tensor, padding)
