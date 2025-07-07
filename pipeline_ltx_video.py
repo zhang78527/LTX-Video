@@ -620,7 +620,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         ), "Cannot provide both latents and media_items. Please provide only one of the two."
 
         assert (
-            latents is None and media_items is None or timestep < 1.0
+            latents is None and media_items is None or timestep <= 1.0
         ), "Input media_item or latents are provided, but they will be replaced with noise."
 
         if media_items is not None:
