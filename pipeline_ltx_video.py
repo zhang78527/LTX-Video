@@ -1004,7 +1004,7 @@ class LTXVideoPipeline(DiffusionPipeline):
         if conditioning_mask is not None and is_video:
             assert num_images_per_prompt == 1
             conditioning_mask = torch.cat([conditioning_mask] * num_conds)
-        fractional_coords = pixel_coords.to(torch.float32)
+        fractional_coords = pixel_coords.to(dtype=torch.float32, device=self._execution_device)
         fractional_coords[:, 0] = fractional_coords[:, 0] * (1.0 / frame_rate)
 
         # 6. 准备额外的步骤
