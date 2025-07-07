@@ -406,22 +406,23 @@ class LTXVideoPipeline(DiffusionPipeline):
             negative_prompt_attention_mask = None
 
         # ====== 新增文本投影层开始 ======
-        # 确保投影层存在（动态创建）
+        # 确保投影层存在（动态创建）永远从transformer配置获取caption_channels，防止未定义
+        caption_channels = self.transformer.config.caption_channels
+        # 如果text_projection不存在，则新建
         if not hasattr(self, 'text_projection'):
-            # 从transformer配置获取caption_channels
-            caption_channels = self.transformer.config.caption_channels
-
         # 创建投影层 (768->4096)
-        self.text_projection = nn.Linear(
-            768, 
-            caption_channels,
-            device=device,
-            dtype=prompt_embeds.dtype if prompt_embeds is not None else torch.float32
-        )
-
-        # 将投影层注册为模块以便设备管理
-        self.text_projection = self.text_projection.to(device)
-        logger.debug(f"✅创建文本投影层: 768 -> {caption_channels}")
+            self.text_projection = nn.Linear(
+                768, 
+                caption_channels,
+                device=device,
+                dtype=prompt_embeds.dtype if prompt_embeds is not None else torch.float32
+            )
+            # 将投影层注册为模块以便设备管理
+            self.text_projection = self.text_projection.to(device)
+            logger.debug(f"✅创建文本投影层: 768 -> {caption_channels}")
+        else:
+            # 如果已存在，确保在正确的device和dtype上
+            self.text_projection = self.text_projection.to(device)
 
         # 应用投影到正提示
         if prompt_embeds is not None:
