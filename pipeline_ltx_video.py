@@ -608,11 +608,14 @@ class LTXVideoPipeline(DiffusionPipeline):
         generator: torch.Generator | List[torch.Generator],
         vae_per_channel_normalize: bool = True,
     ):
-        if isinstance(generator, list) and len(generator) != latent_shape[0]:
-            raise ValueError(
-                f"You have passed a list of generators of length {len(generator)}, but requested an effective batch"
-                f" size of {latent_shape[0]}. Make sure the batch size matches the length of the generators."
-            )
+        # 强制device和generator.device一致
+        if isinstance(generator, list):
+            gen_device = generator[0].device
+        else:
+            gen_device = generator.device if generator is not None else device
+        if device != gen_device:
+            logger.warning(f"prepare_latents: device ({device}) != generator.device ({gen_device}), force device to generator.device")
+            device = gen_device
 
         # 使用给定的latents 或编码器的媒体项 初始化latent
         assert (
